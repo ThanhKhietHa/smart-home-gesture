@@ -50,8 +50,8 @@ MQTT_RECONNECT_DELAY = 3.0    # seconds between reconnect attempts
 #   4. Set thresholds BETWEEN your max and their min
 #   5. If getting false rejects  → raise by 0.02
 #   6. If getting false accepts  → lower by 0.02
-FACE_SHAPE_THRESHOLD    = 0.32
-FACE_IDENTITY_THRESHOLD = 0.14
+FACE_SHAPE_THRESHOLD    = 0.10
+FACE_IDENTITY_THRESHOLD = 0.008
 
 FACE_CONFIRM_FRAMES     = 6     # consecutive match frames needed to unlock
 FACE_RELOCK_FRAMES      = 30    # consecutive no-match frames to re-lock
