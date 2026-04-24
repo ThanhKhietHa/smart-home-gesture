@@ -1,0 +1,11 @@
+# Personal biometric data — never upload
+data/enrolled_faces.pkl
+data/enroll_photos/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+Thumbs.db
+.DS_Store
