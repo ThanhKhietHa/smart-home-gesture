@@ -69,10 +69,10 @@ while cap.isOpened():
         fps = 1.0 / (now - fps_time + 1e-6)
         fps_time = now
 
-    # Cleanup
-    cap.release()
-    cv2.destroyAllWindows()
-    mqtt.stop()
+        # Cleanup
+        cap.release()
+        cv2.destroyAllWindows()
+        mqtt.stop()
 
 if __name__ == '__main__':
     main()
