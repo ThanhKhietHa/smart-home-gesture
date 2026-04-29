@@ -25,8 +25,8 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # CAMERA
 # =====================================================================
 CAMERA_INDEX        = 0       # 0 = default camera. Change to 1 if using 2nd camera.
-CAMERA_WIDTH        = 640
-CAMERA_HEIGHT       = 480
+CAMERA_WIDTH        = 320
+CAMERA_HEIGHT       = 240
 
 # =====================================================================
 # MQTT
