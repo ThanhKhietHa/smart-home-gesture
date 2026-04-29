@@ -23,8 +23,7 @@ import config
 # ── MediaPipe ─────────────────────────────────────────────────────────
 _hand_options = vision.HandLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
-    running_mode=vision.RunningMode.IMAGE, 
-    delegate=python.BaseOptions.Delegate.GPU
+    running_mode=vision.RunningMode.IMAGE,
     num_hands=1,
     min_hand_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
     min_tracking_confidence=config.HAND_TRACKING_CONFIDENCE,
@@ -104,24 +103,23 @@ class GestureControl:
         if lm:
             H, W = frame.shape[:2]
             for pt in lm:
-                cv2.circle(frame,(int(pt.x*W),int(pt.y*H)),4,(0,255,0),-1)
+                cv2.circle(frame,(int(pt.x*W),int(pt.y*H)),5,(0,255,0),-1)
 
-        # Blocked — face not authenticated
+        # Blocked
         if not face_unlocked:
             self._reset()
             cv2.putText(frame,"FACE AUTH REQUIRED",
                         (20,160),cv2.FONT_HERSHEY_SIMPLEX,1.0,(0,0,220),2)
             self._draw_devices(frame)
-            return frame, None    # ← always return (frame, feedback) tuple
+            return frame
 
-        feedback = None
         if self._state == _GS_CONFIRM:
-            feedback = self._do_confirm(frame, detected, mqtt)
+            self._do_confirm(frame, detected, mqtt)
         else:
             self._do_detection(frame, detected)
 
         self._draw_devices(frame)
-        return frame, feedback    # ← feedback shown by main thread safely
+        return frame
 
     def _smooth(self):
         if not self._buf: return "No hand"
