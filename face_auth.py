@@ -275,43 +275,43 @@ class FaceAuth:
             print("[FACE] Manually re-locked.")
 
     # ── Main per-frame call ────────────────────────────────────────────
-def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = False) -> np.ndarray:
-        # 1. Initialize variables
-        result = None
-        lm = None
-        face_ok = False
-        face_too_small = False
-
-        # 2. Inference Logic
-        if not skip_inference:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = _landmarker.detect(
-                mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-            lm = _to_np(result)
-
-            if lm is not None:
-                H = frame.shape[0]
-                # Ensure result.face_landmarks exists before indexing
-                if result.face_landmarks:
-                    ys = [pt.y*H for pt in result.face_landmarks[0]]
-                    if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
-                        face_ok = True
-                    else:
-                        face_too_small = True
-
-        # 3. State Routing (The part that was glitching)
-        if self._state == _ST_RECOGNISE:
-            frame = self._state_recognise(frame, result, lm, face_ok, face_too_small, key)
-        elif self._state == _ST_TYPING:
-            frame = self._state_typing(frame, key)
-        elif self._state == _ST_ENROLLING:
-            frame = self._state_enrolling(frame, result, lm, key)
-        elif self._state == _ST_DELETE:
-            frame = self._state_delete(frame, key)
-
-        # 4. Shared UI
-        self.draw_status_bar(frame)
-        return frame
+           def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = False) -> np.ndarray:
+                # 1. Initialize variables
+                result = None
+                lm = None
+                face_ok = False
+                face_too_small = False
+        
+                # 2. Inference Logic
+                if not skip_inference:
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    result = _landmarker.detect(
+                        mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+                    lm = _to_np(result)
+        
+                    if lm is not None:
+                        H = frame.shape[0]
+                        # Ensure result.face_landmarks exists before indexing
+                        if result.face_landmarks:
+                            ys = [pt.y*H for pt in result.face_landmarks[0]]
+                            if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
+                                face_ok = True
+                            else:
+                                face_too_small = True
+        
+                # 3. State Routing (The part that was glitching)
+                if self._state == _ST_RECOGNISE:
+                    frame = self._state_recognise(frame, result, lm, face_ok, face_too_small, key)
+                elif self._state == _ST_TYPING:
+                    frame = self._state_typing(frame, key)
+                elif self._state == _ST_ENROLLING:
+                    frame = self._state_enrolling(frame, result, lm, key)
+                elif self._state == _ST_DELETE:
+                    frame = self._state_delete(frame, key)
+        
+                # 4. Shared UI
+                self.draw_status_bar(frame)
+                return frame
 
     # ── STATE: RECOGNISE ──────────────────────────────────────────────
     def _state_recognise(self, frame, result, lm, face_ok,
