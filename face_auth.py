@@ -48,7 +48,7 @@ _RIGHT_MOUTH= 291
 _CHIN       = 152
 
 _STABLE = [4,6,8,9,10, 33,133,159,145,263, 234,454,
-           152,10, 61,291, 70,300, 168,197]
+           152,13, 61,291, 70,300, 168,197]   # 13=ring_mcp, was duplicate 10
 
 # =====================================================================
 # APP STATES
@@ -273,36 +273,36 @@ class FaceAuth:
     # ── Main per-frame call ────────────────────────────────────────────
     def process_frame(self, frame: np.ndarray, key: int) -> np.ndarray:
         """
-        Runs face detection + auth logic on `frame`.
-        Draws all face UI onto frame.
-        Returns (possibly combined) frame to display.
+        Runs face detection ONLY when in RECOGNISE or ENROLLING state.
+        Skips expensive detection during TYPING and DELETE states.
         """
+        # ── Fast path: no detection needed for UI-only states ──────────
+        if self._state == _ST_TYPING:
+            return self._state_typing(frame, key)
+        if self._state == _ST_DELETE:
+            return self._state_delete(frame, key)
+
+        # ── Detection needed for RECOGNISE and ENROLLING ───────────────
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = _landmarker.detect(
             mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
         lm     = _to_np(result)
 
-        # Face size check
-        face_ok = False
+        face_ok        = False
         face_too_small = False
         if lm is not None:
-            H = frame.shape[0]
+            H  = frame.shape[0]
             ys = [pt.y*H for pt in result.face_landmarks[0]]
             if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
                 face_ok = True
             else:
                 face_too_small = True
 
-        # ── Route to correct state ─────────────────────────────────────
         if self._state == _ST_RECOGNISE:
-            return self._state_recognise(frame, result, lm, face_ok,
-                                          face_too_small, key)
-        elif self._state == _ST_TYPING:
-            return self._state_typing(frame, key)
-        elif self._state == _ST_ENROLLING:
+            return self._state_recognise(frame, result, lm,
+                                          face_ok, face_too_small, key)
+        if self._state == _ST_ENROLLING:
             return self._state_enrolling(frame, result, lm, key)
-        elif self._state == _ST_DELETE:
-            return self._state_delete(frame, key)
 
         return frame
 
@@ -374,12 +374,9 @@ class FaceAuth:
             cv2.putText(frame, lbl, (x1, max(y1-10,85)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, lc, 2)
 
-        # Locked red overlay
+        # Locked red border (cheap — no full-frame copy needed)
         if not self._unlocked:
-            ov = frame.copy()
-            cv2.rectangle(ov,(0,0),(frame.shape[1],frame.shape[0]),(0,0,110),-1)
-            cv2.addWeighted(ov,0.18,frame,0.82,0,frame)
-            cv2.rectangle(frame,(0,0),(frame.shape[1]-1,frame.shape[0]-1),(0,0,190),4)
+            cv2.rectangle(frame,(0,0),(frame.shape[1]-1,frame.shape[0]-1),(0,0,200),5)
 
         return frame
 
