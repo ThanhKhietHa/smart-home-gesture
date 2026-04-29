@@ -1,15 +1,9 @@
 """
 face_auth.py — Face Recognition & Enrollment Module
 =====================================================
-Responsibilities:
-  - Enroll faces (on-screen keyboard, no input(), no camera hijack)
-  - Recognize faces frame-by-frame
-  - Expose is_unlocked() / unlocked_name() to main.py
-  - Manage auth state: unlock, re-lock, timeout
-State machine:
-  RECOGNISE → TYPING → ENROLLING → RECOGNISE
-              (on-screen keyboard)
+Fixed & Improved Version - April 2026
 """
+
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -19,10 +13,10 @@ import pickle
 import os
 import time
 from collections import deque
-import config
+import config  # Make sure config.py is updated as per previous suggestion
 
 # =====================================================================
-# MEDIAPIPE
+# MEDIAPIPE SETUP
 # =====================================================================
 _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(
@@ -46,6 +40,7 @@ _RIGHT_EYE = 263
 _LEFT_MOUTH = 61
 _RIGHT_MOUTH = 291
 _CHIN = 152
+
 _STABLE = [4, 6, 8, 9, 10, 33, 133, 159, 145, 263, 234, 454,
            152, 10, 61, 291, 70, 300, 168, 197]
 
@@ -67,10 +62,10 @@ _KB_ROWS = [
 ]
 _KB_H = 165
 
-
 def _draw_keyboard(frame, typed):
     h, w = frame.shape[:2]
     panel = np.full((_KB_H, w, 3), 30, dtype=np.uint8)
+    
     cv2.rectangle(panel, (10, 5), (w-10, 38), (50, 50, 50), -1)
     cv2.putText(panel, typed + "|", (16, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 200), 2)
@@ -99,7 +94,6 @@ def _draw_keyboard(frame, typed):
 
 
 def _kb_hittest(fh, fw, mx, my, typed):
-    """Returns (typed, done, cancelled)."""
     if my < fh:
         return typed, False, False
     ry = my - fh
@@ -117,13 +111,12 @@ def _kb_hittest(fh, fw, mx, my, typed):
             bw = kw * 2 if ch in ("DEL", "OK") else kw
             if kx <= mx <= kx + bw:
                 if ch == "DEL":
-                    return typed[:-1], False, False
+                    return typed[:-1] if typed else "", False, False
                 elif ch == "OK":
                     return typed, bool(typed.strip()), False
                 else:
                     return typed + ch, False, False
     return typed, False, False
-
 
 # =====================================================================
 # LANDMARK HELPERS
@@ -131,8 +124,7 @@ def _kb_hittest(fh, fw, mx, my, typed):
 def _to_np(result):
     if not result.face_landmarks:
         return None
-    return np.array([[l.x, l.y, l.z] for l in result.face_landmarks[0]],
-                    dtype=np.float32)
+    return np.array([[l.x, l.y, l.z] for l in result.face_landmarks[0]], dtype=np.float32)
 
 
 def _normalize(lm):
@@ -149,10 +141,12 @@ def _head_pose(lm, shape):
     h, w = shape[:2]
     idx = [_NOSE, _CHIN, _LEFT_EYE, _RIGHT_EYE, _LEFT_MOUTH, _RIGHT_MOUTH]
     p2d = np.array([[lm[i, 0] * w, lm[i, 1] * h] for i in idx], dtype=np.float32)
+    
     cam = np.array([[w, 0, w/2], [0, w, h/2], [0, 0, 1]], dtype=np.float32)
     obj = np.array([[0, 0, 0], [0, -63.6, -12.5], [-43.3, 32.7, -26],
                     [43.3, 32.7, -26], [-28.9, -28.9, -24.1], [28.9, -28.9, -24.1]],
                    dtype=np.float32)
+
     _, rv, _ = cv2.solvePnP(obj, p2d, cam, np.zeros((4, 1), np.float32))
     R, _ = cv2.Rodrigues(rv)
     yaw = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
@@ -191,7 +185,6 @@ def _save_db(db):
 
 
 def _identify(lm_n, db):
-    """Returns (name, shape_err, cosine_err, is_match)."""
     if not db:
         return 'Unknown', 999.0, 999.0, False
 
@@ -230,7 +223,7 @@ class FaceAuth:
         self._match_buf = deque(maxlen=config.FACE_CONFIRM_FRAMES)
         self._relock_buf = deque(maxlen=config.FACE_RELOCK_FRAMES)
 
-        # Metrics for debug
+        # Metrics
         self.last_se = 999.0
         self.last_ie = 999.0
         self.last_cand = "—"
@@ -251,13 +244,13 @@ class FaceAuth:
         self._my = 0
         self._clicked = False
 
-    # ── Mouse callback ─────────────────────────────────────────────
+    # Mouse callback
     def mouse_callback(self, event, x, y, flags, param):
         self._mx, self._my = x, y
         if event == cv2.EVENT_LBUTTONDOWN:
             self._clicked = True
 
-    # ── Public queries ─────────────────────────────────────────────
+    # Public API
     def is_unlocked(self) -> bool:
         return self._unlocked
 
@@ -267,7 +260,7 @@ class FaceAuth:
     def enrolled_names(self) -> list:
         return list(self._db.keys())
 
-    # ── Key handler ────────────────────────────────────────────────
+    # Key handler
     def handle_key(self, key: int):
         if self._state != _ST_RECOGNISE:
             return
@@ -286,16 +279,14 @@ class FaceAuth:
             print("[FACE] Manually re-locked.")
 
     # =================================================================
-    # FIXED: process_frame
+    # MAIN PROCESS FRAME
     # =================================================================
     def process_frame(self, frame: np.ndarray, key: int = -1, skip_inference: bool = False) -> np.ndarray:
-        """Main entry point. Call every frame."""
         result = None
         lm = None
         face_ok = False
         face_too_small = False
 
-        # 1. Run inference only when needed
         if not skip_inference:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = _landmarker.detect(
@@ -311,7 +302,7 @@ class FaceAuth:
                 else:
                     face_too_small = True
 
-        # 2. Route to current state
+        # Route to current state
         if self._state == _ST_RECOGNISE:
             frame = self._state_recognise(frame, result, lm, face_ok, face_too_small, key)
         elif self._state == _ST_TYPING:
@@ -321,12 +312,10 @@ class FaceAuth:
         elif self._state == _ST_DELETE:
             frame = self._state_delete(frame, key)
 
-        # 3. Always draw status bar on top
         self.draw_status_bar(frame)
-
         return frame
 
-    # ── STATE: RECOGNISE ───────────────────────────────────────────
+    # ==================== RECOGNISE STATE ====================
     def _state_recognise(self, frame, result, lm, face_ok, face_too_small, key):
         frame_match = False
         matched_name = "Unknown"
@@ -350,27 +339,27 @@ class FaceAuth:
         self._match_buf.append(frame_match)
         self._relock_buf.append(frame_match)
 
-        # Unlock logic
-        if (sum(self._match_buf) >= int(config.FACE_CONFIRM_FRAMES * 0.7) and not self._unlocked):
+        # Unlock
+        if sum(self._match_buf) >= int(config.FACE_CONFIRM_FRAMES * 0.7) and not self._unlocked:
             self._unlocked = True
             self._unlock_name = matched_name
             self._unlock_time = time.time()
             print(f"[FACE] UNLOCKED — {self._unlock_name}")
 
-        # Re-lock: face disappeared
-        if (self._unlocked and
-                len(self._relock_buf) == config.FACE_RELOCK_FRAMES and
-                sum(self._relock_buf) == 0):
+        # Re-lock: face gone
+        if (self._unlocked and 
+            len(self._relock_buf) == config.FACE_RELOCK_FRAMES and 
+            sum(self._relock_buf) == 0):
             self._unlocked = False
             print("[FACE] Re-locked (face gone)")
 
         # Re-lock: timeout
-        if (self._unlocked and
-                (time.time() - self._unlock_time) > config.FACE_AUTH_TIMEOUT):
+        if (self._unlocked and 
+            (time.time() - self._unlock_time) > config.FACE_AUTH_TIMEOUT):
             self._unlocked = False
             print("[FACE] Re-locked (timeout)")
 
-        # Draw landmarks and box
+        # Draw face
         if lm is not None and result is not None and result.face_landmarks:
             H, W = frame.shape[:2]
             col = (0, 255, 0) if frame_match else (0, 70, 220)
@@ -383,15 +372,14 @@ class FaceAuth:
             x2, y2 = int(max(xs)) + 10, int(max(ys)) + 10
 
             cv2.rectangle(frame, (x1, y1), (x2, y2),
-                          (0, 220, 0) if frame_match else (0, 60, 220),
-                          3 if frame_match else 2)
+                          (0, 220, 0) if frame_match else (0, 60, 220), 3 if frame_match else 2)
 
             lbl = reject_msg if reject_msg else matched_name if self._db else "No faces enrolled"
             lc = (0, 150, 255) if reject_msg else (0, 255, 0) if frame_match else (60, 100, 255)
             cv2.putText(frame, lbl, (x1, max(y1 - 10, 85)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, lc, 2)
 
-        # Locked red overlay
+        # Locked overlay
         if not self._unlocked:
             ov = frame.copy()
             cv2.rectangle(ov, (0, 0), (frame.shape[1], frame.shape[0]), (0, 0, 110), -1)
@@ -400,7 +388,7 @@ class FaceAuth:
 
         return frame
 
-    # ── STATE: TYPING ──────────────────────────────────────────────
+    # ==================== TYPING STATE ====================
     def _state_typing(self, frame, key):
         combined = _draw_keyboard(frame, self._typed)
         fh, fw = frame.shape[:2]
@@ -428,21 +416,26 @@ class FaceAuth:
         self._enroll_col = []
         self._enroll_start = time.time()
         self._state = _ST_ENROLLING
-        print(f"[FACE] Enrolling: {name}")
+        print(f"[FACE] Starting enrollment for: {name}")
 
-    # ── STATE: ENROLLING ───────────────────────────────────────────
+    # ==================== ENROLLING STATE (FIXED) ====================
     def _state_enrolling(self, frame, result, lm, key):
         name = self._enroll_name
         collected = self._enroll_col
-        TIMEOUT = 50.0
+        TIMEOUT = 60.0
         remaining = TIMEOUT - (time.time() - self._enroll_start)
+
         is_good = False
         status = "No face detected"
 
         if lm is not None and result is not None and result.face_landmarks:
             try:
                 yaw, pitch = _head_pose(lm, frame.shape)
-                if abs(yaw) < 35 and abs(pitch) < 25:
+
+                # === FIXED & IMPROVED CONDITION ===
+                if (abs(yaw) < config.FACE_ENROLL_MAX_YAW and 
+                    abs(pitch) < config.FACE_ENROLL_MAX_PITCH):
+
                     lm_n = _normalize(lm)
                     collected.append(_stable(lm_n))
                     status = f"Good frame {len(collected)}/{config.FACE_ENROLL_TARGET}"
@@ -452,10 +445,11 @@ class FaceAuth:
                     for pt in result.face_landmarks[0]:
                         cv2.circle(frame, (int(pt.x * W), int(pt.y * H)), 2, (0, 255, 0), -1)
                 else:
-                    status = f"Turn straight yaw={yaw:.0f} pitch={pitch:.0f}"
+                    status = f"Look straight → yaw={yaw:+.0f}° pitch={pitch:+.0f}°"
                     H, W = frame.shape[:2]
                     for pt in result.face_landmarks[0]:
-                        cv2.circle(frame, (int(pt.x * W), int(pt.y * H)), 2, (0, 140, 255), -1)
+                        cv2.circle(frame, (int(pt.x * W), int(pt.y * H)), 2, (0, 180, 255), -1)
+
             except Exception:
                 status = "Adjust position"
 
@@ -464,20 +458,23 @@ class FaceAuth:
         cv2.putText(frame, f"ENROLLING: {name}", (20, 42),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
         cv2.putText(frame, status, (20, 82), cv2.FONT_HERSHEY_SIMPLEX, 0.85,
-                    (0, 255, 100) if is_good else (0, 150, 255), 2)
+                    (0, 255, 100) if is_good else (0, 180, 255), 2)
 
+        # Progress bar
         prog = len(collected) / config.FACE_ENROLL_TARGET
         bw = frame.shape[1] - 40
         cv2.rectangle(frame, (20, 118), (20 + bw, 140), (50, 50, 50), -1)
-        cv2.rectangle(frame, (20, 118), (20 + int(bw * prog), 140), (0, 220, 100), -1)
+        cv2.rectangle(frame, (20, 118), (20 + int(bw * min(prog, 1.0)), 140), (0, 220, 100), -1)
 
         cv2.putText(frame,
-                    f"{int(prog * 100)}% — 30-50cm, look straight | {remaining:.0f}s left",
+                    f"{int(prog * 100)}%  |  Keep looking at camera • 30-50cm  |  {remaining:.0f}s left",
                     (20, 162), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 1)
+
         cv2.putText(frame, "ESC = cancel", (20, frame.shape[0] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (150, 150, 150), 1)
 
-        if key == 27:
+        # Finish enrollment
+        if key == 27:  # ESC
             print("[FACE] Enrollment cancelled.")
             self._state = _ST_RECOGNISE
             self._reset_buffers()
@@ -487,21 +484,22 @@ class FaceAuth:
         return frame
 
     def _finish_enroll(self, collected, name, frame):
-        if len(collected) >= 10:
+        if len(collected) >= 15:   # Minimum acceptable frames
             avg = np.mean(collected, axis=0).astype(np.float32)
             self._db[name] = {'stable': avg, 'frames': len(collected)}
             _save_db(self._db)
 
-            photo = os.path.join(config.ENROLL_PHOTOS_DIR, f"{name}.jpg")
-            cv2.imwrite(photo, frame)
-            print(f"[FACE] '{name}' enrolled ({len(collected)} frames). Photo saved.")
+            photo_path = os.path.join(config.ENROLL_PHOTOS_DIR, f"{name}.jpg")
+            cv2.imwrite(photo_path, frame)
+
+            print(f"[FACE] Successfully enrolled '{name}' with {len(collected)} frames.")
         else:
-            print(f"[FACE] Enroll failed — only {len(collected)} frames collected.")
+            print(f"[FACE] Enrollment failed — only {len(collected)} frames collected.")
 
         self._state = _ST_RECOGNISE
         self._reset_buffers()
 
-    # ── STATE: DELETE ──────────────────────────────────────────────
+    # ==================== DELETE STATE ====================
     def _state_delete(self, frame, key):
         panel = np.full_like(frame, 25)
         cv2.putText(panel, "DELETE WHICH FACE?", (20, 55),
@@ -531,10 +529,10 @@ class FaceAuth:
         self._match_buf.clear()
         self._relock_buf.clear()
 
-    # ── Status Bar ─────────────────────────────────────────────────
+    # Status Bar
     def draw_status_bar(self, frame: np.ndarray) -> np.ndarray:
-        cv2.rectangle(frame, (0, 0), (frame.shape[1], 72),
-                      (0, 100, 0) if self._unlocked else (0, 0, 120), -1)
+        color = (0, 100, 0) if self._unlocked else (0, 0, 120)
+        cv2.rectangle(frame, (0, 0), (frame.shape[1], 72), color, -1)
 
         if self._unlocked:
             rem = max(0.0, config.FACE_AUTH_TIMEOUT - (time.time() - self._unlock_time))
@@ -546,46 +544,24 @@ class FaceAuth:
         else:
             if not self._db:
                 msg = "NO FACES ENROLLED — press 'e'"
-            elif not self._match_buf:
-                msg = "LOCKED — No face in view"
             else:
-                prog = sum(self._match_buf) / config.FACE_CONFIRM_FRAMES
+                prog = sum(self._match_buf) / config.FACE_CONFIRM_FRAMES if self._match_buf else 0
                 msg = f"LOCKED — Scanning... {int(prog * 100)}%"
             cv2.putText(frame, msg, (15, 48),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (80, 140, 255), 2)
 
-        # Progress bar when locked
-        if not self._unlocked and self._match_buf:
-            prog = sum(self._match_buf) / config.FACE_CONFIRM_FRAMES
-            bw = frame.shape[1] - 40
-            cv2.rectangle(frame, (20, 76), (20 + bw, 92), (50, 50, 50), -1)
-            cv2.rectangle(frame, (20, 76),
-                          (20 + int(bw * min(prog, 1.0)), 92), (0, 180, 255), -1)
-
         return frame
 
-    # ── Debug Panel ────────────────────────────────────────────────
+    # Debug Panel (optional)
     def draw_debug(self, frame: np.ndarray) -> np.ndarray:
         my = frame.shape[0] - 105
         cv2.rectangle(frame, (0, my - 8), (360, frame.shape[0]), (20, 20, 20), -1)
-        mc = lambda v, t: (0, 200, 0) if v < t else (0, 50, 220)
-
-        cv2.putText(frame,
-            f"Shape : {self.last_se:.3f} thr={config.FACE_SHAPE_THRESHOLD}",
-            (8, my + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.56,
-            mc(self.last_se, config.FACE_SHAPE_THRESHOLD), 1)
-
-        cv2.putText(frame,
-            f"Cosine: {self.last_ie:.3f} thr={config.FACE_IDENTITY_THRESHOLD}",
-            (8, my + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.56,
-            mc(self.last_ie, config.FACE_IDENTITY_THRESHOLD), 1)
-
-        cv2.putText(frame,
-            f"DB : {', '.join(self._db.keys()) or 'empty'}",
-            (8, my + 56), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (200, 200, 200), 1)
-
-        cv2.putText(frame,
-            "e=Enroll  d=Delete  r=Relock",
-            (8, my + 76), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (130, 130, 130), 1)
-
+        cv2.putText(frame, f"Shape : {self.last_se:.3f} thr={config.FACE_SHAPE_THRESHOLD}",
+                    (8, my + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (0, 200, 0), 1)
+        cv2.putText(frame, f"Cosine: {self.last_ie:.3f} thr={config.FACE_IDENTITY_THRESHOLD}",
+                    (8, my + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.56, (0, 200, 0), 1)
+        cv2.putText(frame, f"DB : {', '.join(self._db.keys()) or 'empty'}",
+                    (8, my + 56), cv2.FONT_HERSHEY_SIMPLEX, 0.54, (200, 200, 200), 1)
+        cv2.putText(frame, "e=Enroll  d=Delete  r=Relock",
+                    (8, my + 76), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (130, 130, 130), 1)
         return frame
