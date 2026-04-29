@@ -275,7 +275,7 @@ class FaceAuth:
             print("[FACE] Manually re-locked.")
 
     # ── Main per-frame call ────────────────────────────────────────────
-           def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = False) -> np.ndarray:
+     def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = False) -> np.ndarray:
                 # 1. Initialize variables
                 result = None
                 lm = None
