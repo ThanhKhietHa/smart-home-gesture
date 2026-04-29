@@ -275,39 +275,50 @@ class FaceAuth:
             print("[FACE] Manually re-locked.")
 
     # ── Main per-frame call ────────────────────────────────────────────
-    def process_frame(self, frame: np.ndarray, key: int) -> np.ndarray:
+def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = False) -> np.ndarray:
         """
         Runs face detection + auth logic on `frame`.
-        Draws all face UI onto frame.
-        Returns (possibly combined) frame to display.
+        Draws all face UI onto frame. Handles skipping of heavy math.
         """
-        rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = _landmarker.detect(
-            mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-        lm     = _to_np(result)
-
-        # Face size check
+        # 1. AI INFERENCE (Skip every few frames to save Jetson CPU)
+        result = None
+        lm = None
         face_ok = False
         face_too_small = False
-        if lm is not None:
-            H = frame.shape[0]
-            ys = [pt.y*H for pt in result.face_landmarks[0]]
-            if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
-                face_ok = True
-            else:
-                face_too_small = True
 
-        # ── Route to correct state ─────────────────────────────────────
+        if not skip_inference:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = _landmarker.detect(
+                mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            lm = _to_np(result)
+
+            # Face size check
+            if lm is not None:
+                H = frame.shape[0]
+                ys = [pt.y*H for pt in result.face_landmarks[0]]
+                if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
+                    face_ok = True
+                else:
+                    face_too_small = True
+
+        # 2. STATE MACHINE & UI DRAWING
+        # Even if we skip_inference, we MUST enter the state functions 
+        # so they can draw the existing UI (keyboard, bars, status).
         if self._state == _ST_RECOGNISE:
-            return self._state_recognise(frame, result, lm, face_ok,
-                                          face_too_small, key)
+            # We pass result=None and lm=None if we skipped inference; 
+            # state_recognise should handle this by not matching but still drawing the status.
+            frame = self._state_recognise(frame, result, lm, face_ok, face_too_small, key)
         elif self._state == _ST_TYPING:
-            return self._state_typing(frame, key)
+            frame = self._state_typing(frame, key)
         elif self._state == _ST_ENROLLING:
-            return self._state_enrolling(frame, result, lm, key)
+            frame = self._state_enrolling(frame, result, lm, key)
         elif self._state == _ST_DELETE:
-            return self._state_delete(frame, key)
+            frame = self._state_delete(frame, key)
 
+        # 3. GLOBAL UI
+        # Ensure status bars are drawn even on skipped frames
+        self.draw_status_bar(frame) 
+        
         return frame
 
     # ── STATE: RECOGNISE ──────────────────────────────────────────────
