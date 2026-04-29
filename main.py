@@ -1,5 +1,3 @@
-
-
 import cv2
 import time
 import config
@@ -34,23 +32,10 @@ def main():
     print("  r = Relock         ESC = Quit")
     print("  (Name entry is ON-SCREEN — no typing in terminal)\n")
 
-    fps_time = time.time()
-    fps      = 0.0
+    fps_time    = time.time()
+    fps         = 0.0
     frame_count = 0
-  # In main.py, add a frame counter
-frame_count = 0
 
-   while True:
-      ret, frame = cap.read()
-      frame_count += 1
-    
-      # Face — every 3 frames
-      if frame_count % 3 == 0:
-           frame = face.process_frame(frame, key)
-    
-       # Hand — every 2 frames
-      if frame_count % 2 == 0:
-           frame = gesture.process_frame(frame, mqtt, face.is_unlocked())
     while cap.isOpened():
         ret, raw = cap.read()
         if not ret:
@@ -58,36 +43,42 @@ frame_count = 0
             time.sleep(0.05)
             continue
 
+        frame_count += 1
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:
+
+        if key == 27:   # ESC = quit
             break
 
-        # ── Face recognition ──────────────────────────────────────────
-        # process_frame draws face landmarks, locked/unlocked overlay,
+        # ── Face recognition (every 3rd frame — saves CPU) ────────────
+        # process_frame draws landmarks, locked/unlocked overlay,
         # handles enroll/delete states, returns annotated frame
-        frame = face.process_frame(raw.copy(), key)
+        if frame_count % 3 == 0:
+            frame = face.process_frame(raw.copy(), key)
+        else:
+            frame = raw.copy()
+
         face.handle_key(key)
 
-        # ── Gesture recognition ───────────────────────────────────────
-        # process_frame draws hand landmarks + gesture UI on same frame
-        # passes face_unlocked so gestures are gated on auth
-        frame = gesture.process_frame(frame, mqtt, face.is_unlocked())
+        # ── Gesture recognition (every 2nd frame) ─────────────────────
+        # gated on face auth — gestures blocked when locked
+        if frame_count % 2 == 0:
+            frame = gesture.process_frame(frame, mqtt, face.is_unlocked())
 
         # ── Shared UI overlays ────────────────────────────────────────
         face.draw_status_bar(frame)   # LOCKED / UNLOCKED bar at top
         face.draw_debug(frame)        # shape/cosine scores bottom-left
-        gesture.draw_fps(frame, fps)  # FPS bottom-right
+        gesture.draw_fps(frame, fps)  # FPS counter bottom-right
 
-        # MQTT connection indicator (top-right corner)
-        mqtt_col = (0,200,0) if mqtt.is_connected() else (0,0,200)
-        mqtt_lbl = "MQTT OK" if mqtt.is_connected() else "MQTT OFF"
+        # MQTT connection indicator top-right
+        mqtt_col = (0, 200, 0) if mqtt.is_connected() else (0, 0, 200)
+        mqtt_lbl = "MQTT OK"  if mqtt.is_connected() else "MQTT OFF"
         cv2.putText(frame, mqtt_lbl,
-                    (frame.shape[1]-120, 25),
+                    (frame.shape[1] - 120, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, mqtt_col, 2)
 
         cv2.imshow(WIN, frame)
 
-        # FPS
+        # FPS calculation
         now      = time.time()
         fps      = 1.0 / (now - fps_time + 1e-6)
         fps_time = now
@@ -100,4 +91,10 @@ frame_count = 0
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        print("\n[CRASH]", e)
+        traceback.print_exc()
+        input("Press Enter to close...")
