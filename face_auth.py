@@ -276,37 +276,31 @@ class FaceAuth:
 
     # ── Main per-frame call ────────────────────────────────────────────
 def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = False) -> np.ndarray:
-        """
-        Runs face detection + auth logic on `frame`.
-        Draws all face UI onto frame. Handles skipping of heavy math.
-        """
-        # 1. AI INFERENCE (Skip every few frames to save Jetson CPU)
+        # 1. Initialize variables
         result = None
         lm = None
         face_ok = False
         face_too_small = False
 
+        # 2. Inference Logic
         if not skip_inference:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = _landmarker.detect(
                 mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
             lm = _to_np(result)
 
-            # Face size check
             if lm is not None:
                 H = frame.shape[0]
-                ys = [pt.y*H for pt in result.face_landmarks[0]]
-                if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
-                    face_ok = True
-                else:
-                    face_too_small = True
+                # Ensure result.face_landmarks exists before indexing
+                if result.face_landmarks:
+                    ys = [pt.y*H for pt in result.face_landmarks[0]]
+                    if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
+                        face_ok = True
+                    else:
+                        face_too_small = True
 
-        # 2. STATE MACHINE & UI DRAWING
-        # Even if we skip_inference, we MUST enter the state functions 
-        # so they can draw the existing UI (keyboard, bars, status).
+        # 3. State Routing (The part that was glitching)
         if self._state == _ST_RECOGNISE:
-            # We pass result=None and lm=None if we skipped inference; 
-            # state_recognise should handle this by not matching but still drawing the status.
             frame = self._state_recognise(frame, result, lm, face_ok, face_too_small, key)
         elif self._state == _ST_TYPING:
             frame = self._state_typing(frame, key)
@@ -315,10 +309,8 @@ def process_frame(self, frame: np.ndarray, key: int, skip_inference: bool = Fals
         elif self._state == _ST_DELETE:
             frame = self._state_delete(frame, key)
 
-        # 3. GLOBAL UI
-        # Ensure status bars are drawn even on skipped frames
-        self.draw_status_bar(frame) 
-        
+        # 4. Shared UI
+        self.draw_status_bar(frame)
         return frame
 
     # ── STATE: RECOGNISE ──────────────────────────────────────────────
