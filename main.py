@@ -1,14 +1,4 @@
-"""
-main.py — Smart Home Face + Gesture Control
-============================================
-Entry point. Ties together:
-  FaceAuth       → identifies who is in front of camera
-  GestureControl → reads hand gestures, gates on face auth
-  MQTTHandler    → publishes commands to ESP32
 
-Single camera, single window.
-Run:  python3 main.py
-"""
 
 import cv2
 import time
@@ -46,7 +36,21 @@ def main():
 
     fps_time = time.time()
     fps      = 0.0
+    frame_count = 0
+  # In main.py, add a frame counter
+frame_count = 0
 
+   while True:
+      ret, frame = cap.read()
+      frame_count += 1
+    
+      # Face — every 3 frames
+      if frame_count % 3 == 0:
+           frame = face.process_frame(frame, key)
+    
+       # Hand — every 2 frames
+      if frame_count % 2 == 0:
+           frame = gesture.process_frame(frame, mqtt, face.is_unlocked())
     while cap.isOpened():
         ret, raw = cap.read()
         if not ret:
