@@ -28,12 +28,16 @@ import config
 # MEDIAPIPE
 # =====================================================================
 _face_options = vision.FaceLandmarkerOptions(
-    base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
+    base_options=python.BaseOptions(
+        model_asset_path=config.FACE_MODEL_PATH,
+        delegate=python.BaseOptions.Delegate.GPU  # Moves math to CUDA cores
+    ),
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
     min_face_detection_confidence=0.4,
     min_face_presence_confidence=0.4,
-    output_facial_transformation_matrixes=True,
+    # Set to False to save processing power if you don't need 3D head tilt
+    output_facial_transformation_matrixes=True, 
 )
 _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
 
