@@ -22,7 +22,10 @@ import config
 
 # ── MediaPipe ─────────────────────────────────────────────────────────
 _hand_options = vision.HandLandmarkerOptions(
-    base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
+    base_options=python.BaseOptions(
+        model_asset_path=config.HAND_MODEL_PATH,
+        delegate=python.BaseOptions.Delegate.GPU  # Added comma here
+    ),
     running_mode=vision.RunningMode.IMAGE,
     num_hands=1,
     min_hand_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
