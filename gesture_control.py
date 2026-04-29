@@ -95,32 +95,42 @@ class GestureControl:
         self._buf             = deque(maxlen=4)
         self.device_states    = dict(config.DEVICE_INITIAL_STATES)
 
-    def process_frame(self, frame, mqtt, face_unlocked):
-        rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = _landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-        lm     = result.hand_landmarks[0] if result.hand_landmarks else None
-        self._buf.append(detect_gesture(lm))
-        detected = self._smooth()
+  def process_frame(self, frame, mqtt, face_unlocked, skip_inference=False):
+        # 1. AI INFERENCE (Skip if told to, to save CPU)
+        detected = "IDLE"
+        if not skip_inference:
+            rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = _landmarker.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            lm     = result.hand_landmarks[0] if result.hand_landmarks else None
+            
+            # Draw landmarks only if we actually ran the detection
+            if lm:
+                H, W = frame.shape[:2]
+                for pt in lm:
+                    cv2.circle(frame, (int(pt.x*W), int(pt.y*H)), 3, (0, 255, 0), -1)
+            
+            self._buf.append(detect_gesture(lm))
+            detected = self._smooth()
+        else:
+            # If skipping inference, we use the last known smoothed gesture
+            detected = self._smooth()
 
-        # Draw landmarks
-        if lm:
-            H, W = frame.shape[:2]
-            for pt in lm:
-                cv2.circle(frame,(int(pt.x*W),int(pt.y*H)),5,(0,255,0),-1)
-
-        # Blocked
+        # 2. AUTHENTICATION GATE
         if not face_unlocked:
             self._reset()
-            cv2.putText(frame,"FACE AUTH REQUIRED",
-                        (20,160),cv2.FONT_HERSHEY_SIMPLEX,1.0,(0,0,220),2)
+            # This was flickering because it wasn't drawn on 'skipped' frames
+            cv2.putText(frame, "FACE AUTH REQUIRED",
+                        (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 220), 2)
             self._draw_devices(frame)
             return frame
 
+        # 3. STATE MACHINE (Logic & Confirmation)
         if self._state == _GS_CONFIRM:
             self._do_confirm(frame, detected, mqtt)
         else:
             self._do_detection(frame, detected)
 
+        # 4. PERSISTENT UI (Always Draw)
         self._draw_devices(frame)
         return frame
 
