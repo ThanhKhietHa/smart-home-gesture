@@ -30,7 +30,7 @@ import config
 _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(
         model_asset_path=config.FACE_MODEL_PATH,
-        delegate=python.BaseOptions.Delegate.GPU  # Moves math to CUDA cores
+        delegate=python.BaseOptions.Delegate.CPU  # Moves math to CUDA cores
     ),
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
