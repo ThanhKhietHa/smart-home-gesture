@@ -31,47 +31,40 @@ def main():
 
     print("System Running... Press ESC to quit.")
 
-    while cap.isOpened():
+while cap.isOpened():
         ret, raw = cap.read()
-        if not ret:
-            continue
+        if not ret: continue
 
         frame_count += 1
         key = cv2.waitKey(1) & 0xFF
         if key == 27: break
 
-        # ── 2. Create the shared frame ────────────────────────────────
-        # We pass this single object to both modules to "stack" the UI
+        # Start with a fresh frame copy for this loop iteration
         frame = raw.copy()
 
-        # ── 3. Logic Staggering (The Secret to High FPS) ──────────────
-        # We rotate the load so the Jetson CPU doesn't choke.
-        # Frame 1: Face Math | Frame 2: Gesture Math | Frame 3: UI Only
-        run_face = (frame_count % 3 == 0)
-        run_gest = (frame_count % 2 == 0)
+        # STAGGERING LOGIC:
+        # Frame 1: Run Face, Skip Gesture
+        # Frame 2: Skip Face, Run Gesture
+        # Frame 3: Skip both (pure UI frame)
+        run_face = (frame_count % 3 == 1)
+        run_gest = (frame_count % 3 == 2)
 
-        # Update Face Auth
-        # Note: We added the 'skip_inference' argument to your modules
+        # Both modules now ALWAYS draw their UI, but only sometimes do math
         face.process_frame(frame, key, skip_inference=not run_face)
-
-        # Update Gesture Control (Gated by face.is_unlocked())
         gesture.process_frame(frame, mqtt, face.is_unlocked(), skip_inference=not run_gest)
 
-        # ── 4. Global Overlays ────────────────────────────────────────
-        # These are usually small functions that don't need skipping
+        # Standard Overlays
         face.draw_debug(frame)
         gesture.draw_fps(frame, fps)
 
-        # MQTT Status Indicator (Top Right)
-        mqtt_col = (0, 200, 0) if mqtt.is_connected() else (0, 0, 200)
+        # MQTT Top-Right Indicator
+        m_col = (0, 200, 0) if mqtt.is_connected() else (0, 0, 200)
         cv2.putText(frame, "MQTT OK" if mqtt.is_connected() else "MQTT OFF",
-                    (frame.shape[1] - 120, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, mqtt_col, 2)
+                    (frame.shape[1]-120, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, m_col, 2)
 
-        # ── 5. Display ────────────────────────────────────────────────
-        cv2.imshow(WIN, frame)
+        cv2.imshow("Smart Home", frame)
 
-        # Calculate actual performance
+        # FPS Calc
         now = time.time()
         fps = 1.0 / (now - fps_time + 1e-6)
         fps_time = now
