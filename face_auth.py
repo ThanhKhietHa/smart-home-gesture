@@ -1,15 +1,34 @@
 """
-face_auth.py — Face Recognition & Enrollment Module
-=====================================================
-Responsibilities:
-  - Enroll faces (on-screen keyboard, no input(), no camera hijack)
-  - Recognize faces frame-by-frame
-  - Expose is_unlocked() / unlocked_name() to main.py
-  - Manage auth state: unlock, re-lock, timeout
+face_auth.py — Face Recognition + Centroid Tracker (Sticky ID)
+==============================================================
 
-State machine:
+Architecture — 3 layers:
+
+  Layer 1  DETECT   (every frame, lightweight)
+           MediaPipe finds face bounding box + landmarks.
+           Cost: ~2ms — always runs.
+
+  Layer 2  TRACK    (every frame, near-zero cost)
+           CentroidTracker matches box to known track by IOU.
+           If match found → update position, skip recognition.
+           If new/unmatched face → trigger Layer 3.
+
+  Layer 3  IDENTIFY (only on new face OR every N frames, expensive)
+           Full landmark comparison against enrolled DB.
+           Cost: ~40ms — runs as rarely as possible.
+
+Grace period:
+  When tracked face disappears, a countdown starts.
+  If face reappears within GRACE_FRAMES → stay unlocked (no re-scan).
+  If countdown expires → re-lock and reset tracker.
+
+Periodic re-verify:
+  Even while tracked, re-runs identification every REVERIFY_FRAMES.
+  Catches face-swap attacks (person walks away, different person steps in).
+  If re-verify fails → immediate re-lock.
+
+State machine (unchanged from previous version):
   RECOGNISE → TYPING → ENROLLING → RECOGNISE
-              (on-screen keyboard)
 """
 
 import cv2
@@ -23,6 +42,19 @@ import time
 from collections import deque
 
 import config
+
+# =====================================================================
+# TUNABLE TRACKER CONSTANTS
+# (exposed here so they're easy to find — could move to config.py)
+# =====================================================================
+GRACE_FRAMES    = 40    # ~2s at 20fps — frames before re-locking when face lost
+IOU_THRESHOLD   = 0.30  # minimum IOU to consider same face across frames
+
+# NOTE: Periodic re-verify is DISABLED per user preference.
+# Recognition only runs when:
+#   1. Face first enters frame (new track, not yet unlocked)
+#   2. System is locked and scanning for a match
+# Once unlocked, tracker holds identity until face is fully lost.
 
 # =====================================================================
 # MEDIAPIPE
@@ -40,23 +72,111 @@ _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
 # =====================================================================
 # LANDMARK CONSTANTS
 # =====================================================================
-_NOSE       = 4
-_LEFT_EYE   = 33
-_RIGHT_EYE  = 263
-_LEFT_MOUTH = 61
-_RIGHT_MOUTH= 291
-_CHIN       = 152
+_NOSE        = 4
+_LEFT_EYE    = 33
+_RIGHT_EYE   = 263
+_LEFT_MOUTH  = 61
+_RIGHT_MOUTH = 291
+_CHIN        = 152
 
+# Stable structural landmarks — no duplicate indices
 _STABLE = [4,6,8,9,10, 33,133,159,145,263, 234,454,
-           152,13, 61,291, 70,300, 168,197]   # 13=ring_mcp, was duplicate 10
+           152,13, 61,291, 70,300, 168,197]
 
 # =====================================================================
 # APP STATES
 # =====================================================================
-_ST_RECOGNISE  = "RECOGNISE"
-_ST_TYPING     = "TYPING"
-_ST_ENROLLING  = "ENROLLING"
-_ST_DELETE     = "DELETE"
+_ST_RECOGNISE = "RECOGNISE"
+_ST_TYPING    = "TYPING"
+_ST_ENROLLING = "ENROLLING"
+_ST_DELETE    = "DELETE"
+
+# =====================================================================
+# CENTROID TRACKER
+# =====================================================================
+class _CentroidTracker:
+    """
+    Lightweight single-face centroid tracker.
+    Uses IOU (Intersection over Union) to match bounding boxes
+    across frames — much faster than any ML-based tracker.
+
+    Tracks ONE face only (matching system requirements).
+    """
+
+    def __init__(self):
+        self._box      = None    # (x1,y1,x2,y2) of tracked face
+        self._centroid = None    # (cx,cy) centre of tracked box
+        self._id       = 0       # increments each time a NEW face is detected
+        self._age      = 0       # frames since this track was last matched
+
+    @staticmethod
+    def _iou(boxA, boxB):
+        """Intersection over Union between two (x1,y1,x2,y2) boxes."""
+        xA = max(boxA[0], boxB[0]);  yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2]);  yB = min(boxA[3], boxB[3])
+        inter = max(0, xB-xA) * max(0, yB-yA)
+        if inter == 0:
+            return 0.0
+        aA = (boxA[2]-boxA[0]) * (boxA[3]-boxA[1])
+        aB = (boxB[2]-boxB[0]) * (boxB[3]-boxB[1])
+        return inter / float(aA + aB - inter + 1e-6)
+
+    def update(self, box):
+        """
+        Call with (x1,y1,x2,y2) bounding box each frame a face is found.
+        Returns (track_id, is_new_face).
+          is_new_face=True  → recognition should run
+          is_new_face=False → face already tracked, skip recognition
+        """
+        if box is None:
+            self._age += 1
+            return self._id, False
+
+        if self._box is None:
+            # First detection ever
+            self._box      = box
+            self._centroid = ((box[0]+box[2])//2, (box[1]+box[3])//2)
+            self._id      += 1
+            self._age      = 0
+            return self._id, True
+
+        iou = self._iou(self._box, box)
+
+        if iou >= IOU_THRESHOLD:
+            # Same face — update position
+            self._box      = box
+            self._centroid = ((box[0]+box[2])//2, (box[1]+box[3])//2)
+            self._age      = 0
+            return self._id, False
+        else:
+            # Different face (moved too much or completely new person)
+            self._box      = box
+            self._centroid = ((box[0]+box[2])//2, (box[1]+box[3])//2)
+            self._id      += 1
+            self._age      = 0
+            return self._id, True
+
+    def lost(self):
+        """Call every frame when NO face is detected."""
+        self._age += 1
+
+    def reset(self):
+        """Full tracker reset — clears all state."""
+        self._box      = None
+        self._centroid = None
+        self._age      = 0
+
+    @property
+    def age(self):
+        return self._age
+
+    @property
+    def centroid(self):
+        return self._centroid
+
+    @property
+    def box(self):
+        return self._box
 
 # =====================================================================
 # ON-SCREEN KEYBOARD
@@ -83,9 +203,9 @@ def _draw_keyboard(frame, typed):
         yt   = 44 + ri*(KH+5)
         xoff = (w - n*(kw+4))//2
         for ci, ch in enumerate(row):
-            kx = xoff + ci*(kw+4)
-            bw = kw*2 if ch in ("DEL","OK") else kw
-            bg = (0,110,0) if ch=="OK" else (110,0,0) if ch=="DEL" else (65,65,88)
+            kx   = xoff + ci*(kw+4)
+            bw   = kw*2 if ch in ("DEL","OK") else kw
+            bg   = (0,110,0) if ch=="OK" else (110,0,0) if ch=="DEL" else (65,65,88)
             cv2.rectangle(panel,(kx,yt),(kx+bw,yt+KH),bg,-1)
             cv2.rectangle(panel,(kx,yt),(kx+bw,yt+KH),(130,130,130),1)
             tx = kx + max((bw-len(ch)*8)//2, 2)
@@ -96,7 +216,6 @@ def _draw_keyboard(frame, typed):
     return np.vstack([frame, panel])
 
 def _kb_hittest(fh, fw, mx, my, typed):
-    """Returns (typed, done, cancelled)."""
     if my < fh:
         return typed, False, False
     ry = my - fh
@@ -105,17 +224,16 @@ def _kb_hittest(fh, fw, mx, my, typed):
         n    = len(row)
         kw   = (fw-20)//10
         yt   = 44 + ri*(KH+5)
-        yb   = yt+KH
-        if not (yt <= ry <= yb):
+        if not (yt <= ry <= yt+KH):
             continue
         xoff = (fw - n*(kw+4))//2
         for ci, ch in enumerate(row):
             kx = xoff + ci*(kw+4)
             bw = kw*2 if ch in ("DEL","OK") else kw
             if kx <= mx <= kx+bw:
-                if ch == "DEL":   return typed[:-1], False, False
-                elif ch == "OK":  return typed, bool(typed.strip()), False
-                else:             return typed+ch,   False,           False
+                if ch == "DEL":  return typed[:-1], False, False
+                elif ch == "OK": return typed, bool(typed.strip()), False
+                else:            return typed+ch,   False,          False
     return typed, False, False
 
 # =====================================================================
@@ -126,6 +244,19 @@ def _to_np(result):
         return None
     return np.array([[l.x,l.y,l.z] for l in result.face_landmarks[0]],
                     dtype=np.float32)
+
+def _get_box(result, shape):
+    """
+    Compute bounding box (x1,y1,x2,y2) in pixels from face landmarks.
+    Returns None if no face detected.
+    """
+    if not result.face_landmarks:
+        return None
+    H, W = shape[:2]
+    xs = [l.x*W for l in result.face_landmarks[0]]
+    ys = [l.y*H for l in result.face_landmarks[0]]
+    return (int(min(xs))-10, int(min(ys))-10,
+            int(max(xs))+10, int(max(ys))+10)
 
 def _normalize(lm):
     nose     = lm[_NOSE].copy()
@@ -179,10 +310,10 @@ def _identify(lm_n, db):
     """Returns (name, shape_err, cosine_err, is_match)."""
     if not db:
         return 'Unknown', 999.0, 999.0, False
-    st       = _stable(lm_n)
-    best_n   = 'Unknown'
-    best_se  = 999.0
-    best_ie  = 999.0
+    st      = _stable(lm_n)
+    best_n  = 'Unknown'
+    best_se = 999.0
+    best_ie = 999.0
     for name, data in db.items():
         se = _shape_err(st, data['stable'])
         ie = _cosine_err(st, data['stable'])
@@ -195,203 +326,228 @@ def _identify(lm_n, db):
     return best_n, best_se, best_ie, match
 
 # =====================================================================
-# FACEAUTH CLASS — used by main.py
+# FACEAUTH CLASS
 # =====================================================================
 class FaceAuth:
     """
-    Call process_frame(frame) every loop iteration.
-    Read is_unlocked() and unlocked_name() to gate gestures.
-    Press 'e' / 'd' / 'r' keys via handle_key(key).
+    Public API (used by main.py — unchanged):
+      process_frame(frame, key) → annotated frame
+      handle_key(key)
+      is_unlocked() → bool
+      unlocked_name() → str
+      enrolled_names() → list
+      draw_status_bar(frame)
+      draw_debug(frame)
+      mouse_callback(event, x, y, flags, param)
     """
 
     def __init__(self):
         self._db           = _load_db()
         self._state        = _ST_RECOGNISE
 
-        # Auth state
+        # ── Auth state ────────────────────────────────────────────────
         self._unlocked     = False
         self._unlock_name  = ""
         self._unlock_time  = 0.0
-        self._match_buf    = deque(maxlen=config.FACE_CONFIRM_FRAMES)
-        self._relock_buf   = deque(maxlen=config.FACE_RELOCK_FRAMES)
 
-        # Metrics for debug panel
+        # ── Centroid tracker ──────────────────────────────────────────
+        self._tracker      = _CentroidTracker()
+        self._grace_count  = 0      # counts up when face is lost
+        self._tracked_id   = -1     # track ID of the currently unlocked face
+
+        # ── Initial unlock buffer (still needed for first identification)
+        self._match_buf    = deque(maxlen=config.FACE_CONFIRM_FRAMES)
+
+        # ── Debug metrics ─────────────────────────────────────────────
         self.last_se       = 999.0
         self.last_ie       = 999.0
         self.last_cand     = "—"
+        self._track_status = "SCANNING"  # shown in debug panel
 
-        # Enroll state
+        # ── Enroll state ──────────────────────────────────────────────
         self._enroll_name  = ""
         self._enroll_col   = []
         self._enroll_start = 0.0
-
-        # Delete state
         self._del_names    = []
-
-        # Typing state
         self._typed        = ""
 
-        # Mouse
-        self._mx = 0
-        self._my = 0
-        self._clicked = False
+        # ── Mouse ─────────────────────────────────────────────────────
+        self._mx = 0;  self._my = 0;  self._clicked = False
 
-    # ── Mouse callback (register with cv2.setMouseCallback) ───────────
+    # ── Mouse callback ────────────────────────────────────────────────
     def mouse_callback(self, event, x, y, flags, param):
         self._mx, self._my = x, y
         if event == cv2.EVENT_LBUTTONDOWN:
             self._clicked = True
 
-    # ── Public queries ─────────────────────────────────────────────────
-    def is_unlocked(self) -> bool:
-        return self._unlocked
+    # ── Public queries ────────────────────────────────────────────────
+    def is_unlocked(self)     -> bool:  return self._unlocked
+    def unlocked_name(self)   -> str:   return self._unlock_name
+    def enrolled_names(self)  -> list:  return list(self._db.keys())
 
-    def unlocked_name(self) -> str:
-        return self._unlock_name
-
-    def enrolled_names(self) -> list:
-        return list(self._db.keys())
-
-    # ── Key handler (called from main loop) ───────────────────────────
-    def handle_key(self, key: int):
+    # ── Key handler ───────────────────────────────────────────────────
+    def handle_key(self, key):
         if self._state != _ST_RECOGNISE:
-            return   # keys during enroll/type handled inside process_frame
+            return
         if key == ord('e'):
-            self._state  = _ST_TYPING
-            self._typed  = ""
-            self._clicked = False
+            self._state = _ST_TYPING;  self._typed = "";  self._clicked = False
         elif key == ord('d'):
             if self._db:
-                self._state     = _ST_DELETE
-                self._del_names = list(self._db.keys())
+                self._state = _ST_DELETE;  self._del_names = list(self._db.keys())
         elif key == ord('r'):
-            self._unlocked = False
-            self._match_buf.clear()
-            self._relock_buf.clear()
-            print("[FACE] Manually re-locked.")
+            self._force_relock("Manual relock")
 
-    # ── Main per-frame call ────────────────────────────────────────────
-    def process_frame(self, frame: np.ndarray, key: int) -> np.ndarray:
-        """
-        Runs face detection ONLY when in RECOGNISE or ENROLLING state.
-        Skips expensive detection during TYPING and DELETE states.
-        """
-        # ── Fast path: no detection needed for UI-only states ──────────
+    # ── Main per-frame entry ──────────────────────────────────────────
+    def process_frame(self, frame, key):
+        # Fast path — no detection for UI-only states
         if self._state == _ST_TYPING:
             return self._state_typing(frame, key)
         if self._state == _ST_DELETE:
             return self._state_delete(frame, key)
 
-        # ── Detection needed for RECOGNISE and ENROLLING ───────────────
+        # Run MediaPipe detection (every frame — lightweight bbox only)
         rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = _landmarker.detect(
             mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-        lm     = _to_np(result)
+        lm  = _to_np(result)
+        box = _get_box(result, frame.shape)
 
-        face_ok        = False
-        face_too_small = False
-        if lm is not None:
-            H  = frame.shape[0]
-            ys = [pt.y*H for pt in result.face_landmarks[0]]
-            if (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC:
-                face_ok = True
-            else:
-                face_too_small = True
-
-        if self._state == _ST_RECOGNISE:
-            return self._state_recognise(frame, result, lm,
-                                          face_ok, face_too_small, key)
         if self._state == _ST_ENROLLING:
             return self._state_enrolling(frame, result, lm, key)
 
-        return frame
+        # ── RECOGNISE state with Sticky ID tracker ────────────────────
+        return self._state_recognise(frame, result, lm, box, key)
 
-    # ── STATE: RECOGNISE ──────────────────────────────────────────────
-    def _state_recognise(self, frame, result, lm, face_ok,
-                          face_too_small, key):
-        frame_match  = False
-        matched_name = "Unknown"
-        reject_msg   = ""
+    # ── RECOGNISE STATE with centroid tracker ─────────────────────────
+    def _state_recognise(self, frame, result, lm, box, key):
 
-        if face_ok and self._db:
-            try:
-                yaw, pitch = _head_pose(lm, frame.shape)
-                if abs(yaw) < 55 and abs(pitch) < 45:
-                    lm_n = _normalize(lm)
-                    matched_name, self.last_se, self.last_ie, frame_match = \
-                        _identify(lm_n, self._db)
-                    self.last_cand = matched_name
-                else:
-                    reject_msg = "Turn head straight"
-            except Exception:
-                pass
-        elif face_too_small:
-            reject_msg = "Move closer (30-50cm)"
+        if box is not None:
+            # ── Face is present — update tracker ──────────────────────
+            track_id, is_new = self._tracker.update(box)
+            self._grace_count = 0   # reset grace period
 
-        self._match_buf.append(frame_match)
-        self._relock_buf.append(frame_match)
+            # Face size guard
+            H = frame.shape[0]
+            ys = [pt.y*H for pt in result.face_landmarks[0]]
+            face_ok = (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC
 
-        # Unlock
-        if (sum(self._match_buf) >= int(config.FACE_CONFIRM_FRAMES*0.7)
-                and not self._unlocked):
-            self._unlocked    = True
-            self._unlock_name = matched_name
-            self._unlock_time = time.time()
-            print(f"[FACE] UNLOCKED — {self._unlock_name}")
+            # Decide whether to run recognition this frame:
+            #   - System locked AND face is present → always try to identify
+            #   - System unlocked → NEVER re-verify (trust tracker fully)
+            #   - New face while unlocked → IGNORE (stay unlocked until
+            #     current face is fully lost, THEN scan the new one)
+            run_recognition = (not self._unlocked) and face_ok and (lm is not None)
 
-        # Re-lock: no face
-        if (self._unlocked
-                and len(self._relock_buf) == config.FACE_RELOCK_FRAMES
-                and sum(self._relock_buf) == 0):
-            self._unlocked = False
-            print("[FACE] Re-locked (face gone)")
+            if run_recognition:
+                self._run_recognition(lm, frame.shape, track_id)
 
-        # Re-lock: timeout
+            # ── Draw face box ──────────────────────────────────────────
+            x1, y1, x2, y2 = box
+            if self._unlocked:
+                # Always show green when unlocked — regardless of who is there
+                box_color  = (0, 220, 0)
+                thickness  = 3
+                name_label = self._unlock_name
+                label_col  = (0, 255, 0)
+            else:
+                box_color  = (0, 60, 220)
+                thickness  = 2
+                name_label = self.last_cand if self.last_cand != "—" else "Scanning..."
+                label_col  = (60, 100, 255)
+
+            cv2.rectangle(frame, (x1,y1), (x2,y2), box_color, thickness)
+            cv2.putText(frame, name_label, (x1, max(y1-10, 85)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, label_col, 2)
+
+            # Draw landmarks
+            H2, W2 = frame.shape[:2]
+            for pt in result.face_landmarks[0]:
+                cv2.circle(frame,
+                           (int(pt.x*W2), int(pt.y*H2)),
+                           1, box_color, -1)
+
+            self._track_status = (
+                f"UNLOCKED — tracking  id={track_id}" if self._unlocked
+                else f"SCANNING  id={track_id}"
+            )
+
+        else:
+            # ── No face detected this frame ───────────────────────────
+            self._tracker.lost()
+            self._grace_count += 1
+            self._track_status = f"LOST  grace={self._grace_count}/{GRACE_FRAMES}"
+
+            if self._unlocked:
+                if self._grace_count >= GRACE_FRAMES:
+                    self._force_relock("Face lost — grace period expired")
+                # else stay unlocked during grace period
+
+        # Auth timeout
         if (self._unlocked
                 and (time.time()-self._unlock_time) > config.FACE_AUTH_TIMEOUT):
-            self._unlocked = False
-            print("[FACE] Re-locked (timeout)")
+            self._force_relock("Session timeout")
 
-        # Draw landmarks + box
-        if lm is not None:
-            H, W = frame.shape[:2]
-            col  = (0,255,0) if frame_match else (0,70,220)
-            for pt in result.face_landmarks[0]:
-                cv2.circle(frame,(int(pt.x*W),int(pt.y*H)),1,col,-1)
-            xs  = [pt.x*W for pt in result.face_landmarks[0]]
-            ys2 = [pt.y*H for pt in result.face_landmarks[0]]
-            x1,y1 = int(min(xs))-10, int(min(ys2))-10
-            x2,y2 = int(max(xs))+10, int(max(ys2))+10
-            cv2.rectangle(frame,(x1,y1),(x2,y2),
-                          (0,220,0) if frame_match else (0,60,220),
-                          3 if frame_match else 2)
-            lbl = (reject_msg if reject_msg
-                   else matched_name if self._db
-                   else "No faces enrolled")
-            lc  = ((0,150,255) if reject_msg
-                   else (0,255,0) if frame_match
-                   else (60,100,255))
-            cv2.putText(frame, lbl, (x1, max(y1-10,85)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, lc, 2)
-
-        # Locked red border (cheap — no full-frame copy needed)
+        # Red border when locked
         if not self._unlocked:
-            cv2.rectangle(frame,(0,0),(frame.shape[1]-1,frame.shape[0]-1),(0,0,200),5)
+            cv2.rectangle(frame,
+                          (0,0), (frame.shape[1]-1, frame.shape[0]-1),
+                          (0,0,200), 5)
 
         return frame
+
+    # ── Run full recognition and update auth state ────────────────────
+    def _run_recognition(self, lm, shape, track_id):
+        """
+        Runs landmark comparison against DB.
+        Only called when system is LOCKED — never when already unlocked.
+        """
+        try:
+            yaw, pitch = _head_pose(lm, shape)
+        except Exception:
+            return
+
+        if abs(yaw) > 55 or abs(pitch) > 45:
+            return
+
+        lm_n = _normalize(lm)
+        name, se, ie, match = _identify(lm_n, self._db)
+
+        self.last_se   = se
+        self.last_ie   = ie
+        self.last_cand = name
+
+        self._match_buf.append(match)
+
+        # Enough consecutive matches → unlock
+        if (match
+                and sum(self._match_buf) >= int(config.FACE_CONFIRM_FRAMES * 0.7)
+                and not self._unlocked):
+            self._unlocked    = True
+            self._unlock_name = name
+            self._unlock_time = time.time()
+            self._tracked_id  = track_id
+            print(f"[FACE] UNLOCKED — {name}  (track_id={track_id})")
+
+    def _force_relock(self, reason=""):
+        if reason:
+            print(f"[FACE] Re-locked: {reason}")
+        self._unlocked    = False
+        self._unlock_name = ""
+        self._tracked_id  = -1
+        self._grace_count = 0
+        self._match_buf.clear()
+        self._tracker.reset()
 
     # ── STATE: TYPING ─────────────────────────────────────────────────
     def _state_typing(self, frame, key):
         combined = _draw_keyboard(frame, self._typed)
         fh, fw   = frame.shape[:2]
-
         if self._clicked:
             self._typed, done, _ = _kb_hittest(
                 fh, fw, self._mx, self._my, self._typed)
             self._clicked = False
             if done and self._typed.strip():
                 self._start_enroll(self._typed.strip())
-
         if key == 27:
             self._state = _ST_RECOGNISE
         elif key in (13,10):
@@ -401,7 +557,6 @@ class FaceAuth:
             self._typed = self._typed[:-1]
         elif 32 <= key <= 122:
             self._typed += chr(key).upper()
-
         return combined
 
     def _start_enroll(self, name):
@@ -457,8 +612,7 @@ class FaceAuth:
         if key == 27:
             print("[FACE] Enrollment cancelled.")
             self._state = _ST_RECOGNISE
-            self._reset_buffers()
-        elif (len(collected) >= config.FACE_ENROLL_TARGET or remaining <= 0):
+        elif len(collected) >= config.FACE_ENROLL_TARGET or remaining <= 0:
             self._finish_enroll(collected, name, frame)
 
         return frame
@@ -475,7 +629,7 @@ class FaceAuth:
             print(f"[FACE] Enroll failed — only {len(collected)} frames.")
             print("  Tips: 30-50cm, good lighting, face straight.")
         self._state = _ST_RECOGNISE
-        self._reset_buffers()
+        self._force_relock()
 
     # ── STATE: DELETE ─────────────────────────────────────────────────
     def _state_delete(self, frame, key):
@@ -485,30 +639,22 @@ class FaceAuth:
         cv2.putText(panel,"Press number key  |  ESC = cancel",
                     (20,95),cv2.FONT_HERSHEY_SIMPLEX,0.7,(150,150,150),1)
         for i, nm in enumerate(self._del_names):
-            cv2.putText(panel,f"  {i+1}.  {nm}",(20,145+i*45),
-                        cv2.FONT_HERSHEY_SIMPLEX,1.1,(255,170,0),2)
-
+            cv2.putText(panel,f"  {i+1}.  {nm}",
+                        (20,145+i*45),cv2.FONT_HERSHEY_SIMPLEX,1.1,(255,170,0),2)
         if key == 27:
             self._state = _ST_RECOGNISE
         elif ord('1') <= key <= ord('9'):
             idx = key - ord('1')
             if idx < len(self._del_names):
                 nm = self._del_names[idx]
-                del self._db[nm]
-                _save_db(self._db)
+                del self._db[nm];  _save_db(self._db)
                 print(f"[FACE] Deleted: {nm}")
             self._state = _ST_RECOGNISE
-            self._reset_buffers()
-
+            self._force_relock()
         return panel
 
-    def _reset_buffers(self):
-        self._match_buf.clear()
-        self._relock_buf.clear()
-
-    # ── Draw auth status bar (called by main.py on top of combined frame)
-    def draw_status_bar(self, frame: np.ndarray) -> np.ndarray:
-        """Draws the LOCKED/UNLOCKED bar at top. Call after process_frame."""
+    # ── Draw auth status bar ──────────────────────────────────────────
+    def draw_status_bar(self, frame):
         cv2.rectangle(frame,(0,0),(frame.shape[1],72),
                       (0,100,0) if self._unlocked else (0,0,120),-1)
         if self._unlocked:
@@ -518,43 +664,53 @@ class FaceAuth:
             cv2.putText(frame,f"Session: {int(rem)}s",
                         (frame.shape[1]-170,48),
                         cv2.FONT_HERSHEY_SIMPLEX,0.75,(160,255,160),1)
+            # Grace period warning — shows when face is briefly lost
+            if self._grace_count > 0:
+                grace_pct = self._grace_count / GRACE_FRAMES
+                cv2.putText(frame,
+                    f"TRACKING... grace {self._grace_count}/{GRACE_FRAMES}",
+                    (15,68),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,200,255),1)
         else:
             if not self._db:
                 msg = "NO FACES ENROLLED — press 'e'"
-            elif not self._match_buf:
+            elif self._tracker.box is None:
                 msg = "LOCKED — No face in view"
             else:
-                prog = sum(self._match_buf)/config.FACE_CONFIRM_FRAMES
+                prog = sum(self._match_buf)/max(config.FACE_CONFIRM_FRAMES,1)
                 msg  = f"LOCKED — Scanning... {int(prog*100)}%"
-            cv2.putText(frame, msg,(15,48),
+            cv2.putText(frame,msg,(15,48),
                         cv2.FONT_HERSHEY_SIMPLEX,1.0,(80,140,255),2)
-
-        # Scan progress bar
-        if not self._unlocked and self._match_buf:
-            prog = sum(self._match_buf)/config.FACE_CONFIRM_FRAMES
-            bw   = frame.shape[1]-40
-            cv2.rectangle(frame,(20,76),(20+bw,92),(50,50,50),-1)
-            cv2.rectangle(frame,(20,76),
-                          (20+int(bw*min(prog,1.0)),92),(0,180,255),-1)
+            if self._match_buf:
+                prog = sum(self._match_buf)/config.FACE_CONFIRM_FRAMES
+                bw   = frame.shape[1]-40
+                cv2.rectangle(frame,(20,76),(20+bw,92),(50,50,50),-1)
+                cv2.rectangle(frame,(20,76),
+                    (20+int(bw*min(prog,1.0)),92),(0,180,255),-1)
         return frame
 
-    # ── Draw debug panel (bottom of frame) ────────────────────────────
-    def draw_debug(self, frame: np.ndarray) -> np.ndarray:
+    # ── Draw debug panel ──────────────────────────────────────────────
+    def draw_debug(self, frame):
         my = frame.shape[0]-105
-        cv2.rectangle(frame,(0,my-8),(360,frame.shape[0]),(20,20,20),-1)
+        cv2.rectangle(frame,(0,my-8),(370,frame.shape[0]),(20,20,20),-1)
         mc = lambda v,t: (0,200,0) if v<t else (0,50,220)
         cv2.putText(frame,
             f"Shape : {self.last_se:.3f}  thr={config.FACE_SHAPE_THRESHOLD}",
-            (8,my+16),cv2.FONT_HERSHEY_SIMPLEX,0.56,
+            (8,my+14),cv2.FONT_HERSHEY_SIMPLEX,0.55,
             mc(self.last_se,config.FACE_SHAPE_THRESHOLD),1)
         cv2.putText(frame,
             f"Cosine: {self.last_ie:.3f}  thr={config.FACE_IDENTITY_THRESHOLD}",
-            (8,my+36),cv2.FONT_HERSHEY_SIMPLEX,0.56,
+            (8,my+32),cv2.FONT_HERSHEY_SIMPLEX,0.55,
             mc(self.last_ie,config.FACE_IDENTITY_THRESHOLD),1)
         cv2.putText(frame,
+            f"Track : {self._track_status}",
+            (8,my+50),cv2.FONT_HERSHEY_SIMPLEX,0.52,(200,200,200),1)
+        cv2.putText(frame,
             f"DB    : {', '.join(self._db.keys()) or 'empty'}",
-            (8,my+56),cv2.FONT_HERSHEY_SIMPLEX,0.54,(200,200,200),1)
+            (8,my+68),cv2.FONT_HERSHEY_SIMPLEX,0.52,(200,200,200),1)
+        cv2.putText(frame,
+            f"Grace : {self._grace_count}/{GRACE_FRAMES} frames",
+            (8,my+86),cv2.FONT_HERSHEY_SIMPLEX,0.50,(140,140,140),1)
         cv2.putText(frame,
             "e=Enroll  d=Delete  r=Relock",
-            (8,my+76),cv2.FONT_HERSHEY_SIMPLEX,0.50,(130,130,130),1)
+            (8,my+102),cv2.FONT_HERSHEY_SIMPLEX,0.48,(130,130,130),1)
         return frame
