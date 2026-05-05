@@ -63,9 +63,9 @@ _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
-    min_face_detection_confidence=0.3,
+    min_face_detection_confidence=0.4,
     min_face_presence_confidence=0.4,
-    output_facial_transformation_matrixes=False,
+    output_facial_transformation_matrixes=True,
 )
 _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
 
