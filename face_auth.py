@@ -60,7 +60,10 @@ IOU_THRESHOLD   = 0.30  # minimum IOU to consider same face across frames
 # MEDIAPIPE
 # =====================================================================
 _face_options = vision.FaceLandmarkerOptions(
-    base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
+    base_options=python.BaseOptions(
+        model_asset_path=config.FACE_MODEL_PATH,
+        delegate=python.BaseOptions.Delegate.GPU
+    ),,
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
     min_face_detection_confidence=0.4,
