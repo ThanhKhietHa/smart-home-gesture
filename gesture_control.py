@@ -1,3 +1,14 @@
+"""
+gesture_control.py — Hand Gesture Recognition & Device Control
+==============================================================
+Fixes in this version:
+  1. No crash when hand disappears — all lm access guarded
+  2. cv2.imshow removed from background thread — feedback returned to main
+  3. Smoothing buffer increased to 6 for stability at low FPS
+  4. _do_confirm always returns a value (was returning None silently)
+  5. Landmark dot size reduced (4→3) for cleaner UI
+"""
+
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -8,20 +19,12 @@ import numpy as np
 from collections import deque
 import config
 
-_hand_result_lock = __import__('threading').Lock()
-_latest_hand_result = None
-
-def _hand_result_callback(result, image, timestamp_ms):
-    global _latest_hand_result
-    with _hand_result_lock:
-        _latest_hand_result = result
-
+# =====================================================================
+# MEDIAPIPE
+# =====================================================================
 _hand_options = vision.HandLandmarkerOptions(
-    base_options=python.BaseOptions(
-        model_asset_path=config.HAND_MODEL_PATH
-    ),
-    running_mode=vision.RunningMode.LIVE_STREAM,  # ← KEY CHANGE
-    result_callback=_hand_result_callback,
+    base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
+    running_mode=vision.RunningMode.IMAGE,
     num_hands=1,
     min_hand_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
     min_tracking_confidence=config.HAND_TRACKING_CONFIDENCE,
@@ -354,4 +357,3 @@ class GestureControl:
         cv2.putText(frame, f"FPS: {fps:.1f}",
                     (frame.shape[1]-115, frame.shape[0]-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180,180,180), 1)
-      
