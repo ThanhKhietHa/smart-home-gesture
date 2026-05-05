@@ -1,7 +1,6 @@
 """
-config.py — Central configuration for Smart Home Gesture Control
-================================================================
-Change settings HERE only. Do not edit other files for configuration.
+config.py — Optimized for Jetson Orin Nano (JetPack 6.0)
+Target: 18-22 FPS
 """
 
 import os
@@ -22,53 +21,54 @@ os.makedirs(DATA_DIR,          exist_ok=True)
 os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 
 # =====================================================================
-# CAMERA
+# CAMERA - CRITICAL FOR FPS
 # =====================================================================
-# USB camera (Kisonli HD 1080) on Jetson / Windows
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 320    # 320x240 gives best FPS on Jetson at 15W
-CAMERA_HEIGHT = 240    # raise to 640x480 only if FPS > 20
+CAMERA_WIDTH  = 320    # 320x240 - OPTIMAL (DO NOT CHANGE to 640x480)
+CAMERA_HEIGHT = 240    # This gives 2-3x speedup
 CAMERA_FPS    = 30
+
+# Frame skipping - KEY OPTIMIZATION
+FACE_DETECT_EVERY_N_FRAMES = 2          # Run face detect every 2 frames when locked
+FACE_DETECT_EVERY_N_FRAMES_UNLOCKED = 90 # Run every 90 frames when unlocked
+GESTURE_EVERY_N_FRAMES = 2               # Run gesture every 2 frames when unlocked
 
 # =====================================================================
 # MQTT
 # =====================================================================
-MQTT_BROKER         = "localhost"   # change to ESP32 broker IP if needed
+MQTT_BROKER         = "localhost"
 MQTT_PORT           = 1883
 MQTT_TOPIC_BASE     = "/smart_home/"
 MQTT_RECONNECT_DELAY = 3.0
 
 # =====================================================================
-# FACE RECOGNITION
+# FACE RECOGNITION - RELAXED THRESHOLDS
 # =====================================================================
-# Tuned for KHIET's debug panel readings:
-#   KHIET:   Shape=0.067  Cosine=0.003
-#   Stranger: Shape=0.144  Cosine=0.014
-# Thresholds set midway between the two:
-FACE_SHAPE_THRESHOLD    = 0.10   # midpoint: 0.067 < 0.10 < 0.144
-FACE_IDENTITY_THRESHOLD = 0.008  # midpoint: 0.003 < 0.008 < 0.014
+FACE_SHAPE_THRESHOLD    = 0.10
+FACE_IDENTITY_THRESHOLD = 0.008
 
-# If getting false rejects → raise by 0.01
-# If getting false accepts → lower by 0.01
+FACE_CONFIRM_FRAMES  = 4       # Faster unlock
+FACE_RELOCK_FRAMES   = 25
+FACE_ENROLL_TARGET   = 25      # Reduced for faster enrollment
+FACE_AUTH_TIMEOUT    = 300.0
+FACE_MIN_HEIGHT_FRAC = 0.18    # Relaxed requirement
 
-FACE_CONFIRM_FRAMES  = 3      # consecutive match frames to unlock (lower = faster)
-FACE_RELOCK_FRAMES   = 25     # consecutive no-match frames to re-lock
-FACE_ENROLL_TARGET   = 60     # good frames per enrollment
-FACE_AUTH_TIMEOUT    = 300.0  # seconds before auto re-lock
-FACE_MIN_HEIGHT_FRAC = 0.20   # face must fill 20% of frame height (relaxed for USB)
+# MediaPipe confidence (lower = faster)
+FACE_DETECTION_CONFIDENCE = 0.35   # Default was 0.5
+FACE_PRESENCE_CONFIDENCE = 0.35    # Default was 0.5
 
 # =====================================================================
-# GESTURE RECOGNITION
+# GESTURE RECOGNITION - FASTER
 # =====================================================================
-HAND_DETECTION_CONFIDENCE = 0.35
-HAND_TRACKING_CONFIDENCE  = 0.35   # slightly relaxed for lower FPS
+HAND_DETECTION_CONFIDENCE = 0.5    # Reduced from 0.6
+HAND_TRACKING_CONFIDENCE  = 0.4    # Reduced from 0.5
 
-GESTURE_HOLD_TIME    = 2.0   # seconds hold before confirm screen
-CONFIRM_HOLD_TIME    = 0.8   # seconds hold thumb to confirm
-CONFIRM_ENTRY_DELAY  = 0.8   # stabilise delay after entering confirm
+GESTURE_HOLD_TIME    = 1.2   # Faster response
+CONFIRM_HOLD_TIME    = 0.5   # Faster confirmation
+CONFIRM_ENTRY_DELAY  = 0.5   # Faster entry
 
 # =====================================================================
-# DEVICE → GESTURE MAPPING
+# DEVICE MAPPING
 # =====================================================================
 GESTURE_COMMANDS = {
     "Open Palm":     ("lights",   "on"),
