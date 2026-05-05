@@ -109,9 +109,11 @@ class SharedState:
 # =====================================================================
 def face_thread(face, buf, state, stop_event):
     """
-    Face recognition thread — processes every other frame to reduce
-    CPU load at 10-12 FPS. The Sticky ID tracker means skipping
-    frames has almost no impact on recognition quality.
+    Smart scheduling:
+      LOCKED   → run face every frame (need to identify user ASAP)
+      UNLOCKED → run face every 90 frames (~4.5s at 20fps)
+                 just enough to detect if user has left
+    This frees ~45ms per frame for gesture when unlocked.
     """
     frame_n = 0
     while not stop_event.is_set():
@@ -122,17 +124,18 @@ def face_thread(face, buf, state, stop_event):
 
         frame_n += 1
         key = state.get_key()
+        unlocked = state.is_unlocked()
 
-        # Process every 2nd frame — halves face model CPU cost
-        # Key events are always processed regardless
-        if frame_n % 2 == 0 or key != -1:
-            frame = face.process_frame(raw, key)
-            face.handle_key(key)
-            state.set_auth(face.is_unlocked(), face.unlocked_name())
-            buf.write_face(frame)
-        else:
-            # Still handle keys on skipped frames
-            face.handle_key(key)
+        # When unlocked — face only needed occasionally to check if user left
+        # Grace period handles short absences so 90-frame interval is safe
+        if unlocked and frame_n % 90 != 0 and key == -1:
+            time.sleep(0.005)
+            continue
+
+        frame = face.process_frame(raw, key)
+        face.handle_key(key)
+        state.set_auth(face.is_unlocked(), face.unlocked_name())
+        buf.write_face(frame)
 
 
 # =====================================================================
@@ -140,12 +143,17 @@ def face_thread(face, buf, state, stop_event):
 # =====================================================================
 def gesture_thread(gesture, buf, state, mqtt, stop_event):
     """
-    Gesture recognition thread — processes every other frame.
-    Smoothing buffer (6 frames) means skipping frames doesn't
-    reduce gesture detection reliability.
+    Smart scheduling:
+      LOCKED   → skip gesture entirely (face not verified, no point running)
+      UNLOCKED → run gesture every frame at full speed
+    This frees ~35ms per frame for face when locked.
     """
-    frame_n = 0
     while not stop_event.is_set():
+        # When locked — no gesture processing needed at all
+        if not state.is_unlocked():
+            time.sleep(0.02)
+            continue
+
         base = buf.read_face()
         if base is None:
             base = buf.read_raw()
@@ -153,14 +161,10 @@ def gesture_thread(gesture, buf, state, mqtt, stop_event):
             time.sleep(0.008)
             continue
 
-        frame_n += 1
-        # Offset from face thread — process on odd frames
-        # so face and gesture don't compete for CPU simultaneously
-        if frame_n % 2 == 1:
-            frame, feedback = gesture.process_frame(base, mqtt, state.is_unlocked())
-            if feedback:
-                state.set_feedback(feedback[0], feedback[1])
-            buf.write_gesture(frame)
+        frame, feedback = gesture.process_frame(base, mqtt, state.is_unlocked())
+        if feedback:
+            state.set_feedback(feedback[0], feedback[1])
+        buf.write_gesture(frame)
 
 
 # =====================================================================
