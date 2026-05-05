@@ -65,7 +65,7 @@ _face_options = vision.FaceLandmarkerOptions(
     num_faces=1,
     min_face_detection_confidence=0.4,
     min_face_presence_confidence=0.4,
-    output_facial_transformation_matrixes=True,
+    output_facial_transformation_matrixes=false,
 )
 _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
 
