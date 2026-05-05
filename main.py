@@ -142,16 +142,10 @@ def face_thread(face, buf, state, stop_event):
 # GESTURE THREAD
 # =====================================================================
 def gesture_thread(gesture, buf, state, mqtt, stop_event):
-    """
-    Smart scheduling:
-      LOCKED   → skip gesture entirely (face not verified, no point running)
-      UNLOCKED → run gesture every frame at full speed
-    This frees ~35ms per frame for face when locked.
-    """
     while not stop_event.is_set():
-        # When locked — no gesture processing needed at all
-        if not state.is_unlocked():
-            time.sleep(0.02)
+        base = buf.read_raw()
+        if base is None:
+            time.sleep(0.005)
             continue
 
         base = buf.read_face()
