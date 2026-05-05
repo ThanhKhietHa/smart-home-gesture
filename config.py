@@ -37,7 +37,7 @@ MQTT_BROKER         = "localhost"   # change to ESP32 broker IP if needed
 MQTT_PORT           = 1883
 MQTT_TOPIC_BASE     = "/smart_home/"
 MQTT_RECONNECT_DELAY = 3.0
-USE_LIVE_STREAM = True
+
 # =====================================================================
 # FACE RECOGNITION
 # =====================================================================
