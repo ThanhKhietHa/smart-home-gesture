@@ -690,27 +690,36 @@ class FaceAuth:
 
     # ── Draw debug panel ──────────────────────────────────────────────
     def draw_debug(self, frame):
-        my = frame.shape[0]-105
-        cv2.rectangle(frame,(0,my-8),(370,frame.shape[0]),(20,20,20),-1)
-        mc = lambda v,t: (0,200,0) if v<t else (0,50,220)
-        cv2.putText(frame,
-            f"Shape : {self.last_se:.3f}  thr={config.FACE_SHAPE_THRESHOLD}",
-            (8,my+14),cv2.FONT_HERSHEY_SIMPLEX,0.55,
-            mc(self.last_se,config.FACE_SHAPE_THRESHOLD),1)
-        cv2.putText(frame,
-            f"Cosine: {self.last_ie:.3f}  thr={config.FACE_IDENTITY_THRESHOLD}",
-            (8,my+32),cv2.FONT_HERSHEY_SIMPLEX,0.55,
-            mc(self.last_ie,config.FACE_IDENTITY_THRESHOLD),1)
-        cv2.putText(frame,
-            f"Track : {self._track_status}",
-            (8,my+50),cv2.FONT_HERSHEY_SIMPLEX,0.52,(200,200,200),1)
-        cv2.putText(frame,
-            f"DB    : {', '.join(self._db.keys()) or 'empty'}",
-            (8,my+68),cv2.FONT_HERSHEY_SIMPLEX,0.52,(200,200,200),1)
-        cv2.putText(frame,
-            f"Grace : {self._grace_count}/{GRACE_FRAMES} frames",
-            (8,my+86),cv2.FONT_HERSHEY_SIMPLEX,0.50,(140,140,140),1)
-        cv2.putText(frame,
-            "e=Enroll  d=Delete  r=Relock",
-            (8,my+102),cv2.FONT_HERSHEY_SIMPLEX,0.48,(130,130,130),1)
+        """
+        Compact debug overlay — top-right corner, semi-transparent,
+        does NOT block the camera view.
+        """
+        H, W = frame.shape[:2]
+        mc = lambda v, t: (0, 220, 0) if v < t else (0, 80, 220)
+
+        lines = [
+            (f"Shape : {self.last_se:.3f} / {config.FACE_SHAPE_THRESHOLD}",
+             mc(self.last_se, config.FACE_SHAPE_THRESHOLD)),
+            (f"Cosine: {self.last_ie:.3f} / {config.FACE_IDENTITY_THRESHOLD}",
+             mc(self.last_ie, config.FACE_IDENTITY_THRESHOLD)),
+            (f"Track : {self._track_status}", (180, 180, 180)),
+            (f"Grace : {self._grace_count}/{GRACE_FRAMES}", (140, 140, 140)),
+            ("e=Enroll  d=Delete  r=Relock", (100, 100, 100)),
+        ]
+
+        # Semi-transparent background — only as wide as needed
+        panel_w = 230
+        panel_h = len(lines) * 18 + 10
+        x0 = W - panel_w - 4
+        y0 = 78   # just below the status bar
+
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0, y0), (W - 2, y0 + panel_h),
+                      (15, 15, 15), -1)
+        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+
+        for i, (text, color) in enumerate(lines):
+            cv2.putText(frame, text,
+                        (x0 + 5, y0 + 14 + i * 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1)
         return frame
