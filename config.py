@@ -24,8 +24,8 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # CAMERA - CRITICAL FOR FPS
 # =====================================================================
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 320    # 320x240 - OPTIMAL (DO NOT CHANGE to 640x480)
-CAMERA_HEIGHT = 240    # This gives 2-3x speedup
+CAMERA_WIDTH  = 160  # 320x240 - OPTIMAL (DO NOT CHANGE to 640x480)
+CAMERA_HEIGHT = 120   # This gives 2-3x speedup
 CAMERA_FPS    = 30
 
 # Frame skipping - KEY OPTIMIZATION
