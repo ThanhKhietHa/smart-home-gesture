@@ -51,17 +51,17 @@ FACE_IDENTITY_THRESHOLD = 0.008  # midpoint: 0.003 < 0.008 < 0.014
 # If getting false rejects → raise by 0.01
 # If getting false accepts → lower by 0.01
 
-FACE_CONFIRM_FRAMES  = 5      # consecutive match frames to unlock (lower = faster)
+FACE_CONFIRM_FRAMES  = 3      # consecutive match frames to unlock (lower = faster)
 FACE_RELOCK_FRAMES   = 25     # consecutive no-match frames to re-lock
-FACE_ENROLL_TARGET   = 40     # good frames per enrollment
+FACE_ENROLL_TARGET   = 60     # good frames per enrollment
 FACE_AUTH_TIMEOUT    = 300.0  # seconds before auto re-lock
 FACE_MIN_HEIGHT_FRAC = 0.20   # face must fill 20% of frame height (relaxed for USB)
 
 # =====================================================================
 # GESTURE RECOGNITION
 # =====================================================================
-HAND_DETECTION_CONFIDENCE = 0.6
-HAND_TRACKING_CONFIDENCE  = 0.5   # slightly relaxed for lower FPS
+HAND_DETECTION_CONFIDENCE = 0.35
+HAND_TRACKING_CONFIDENCE  = 0.35   # slightly relaxed for lower FPS
 
 GESTURE_HOLD_TIME    = 2.0   # seconds hold before confirm screen
 CONFIRM_HOLD_TIME    = 0.8   # seconds hold thumb to confirm
