@@ -62,7 +62,7 @@ IOU_THRESHOLD   = 0.30  # minimum IOU to consider same face across frames
 _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(
         model_asset_path=config.FACE_MODEL_PATH,
-        delegate=python.BaseOptions.Delegate.GPU
+        delegate=python.BaseOptions.Delegate.CPU
     ),,
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
