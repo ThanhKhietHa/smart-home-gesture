@@ -357,3 +357,4 @@ class GestureControl:
         cv2.putText(frame, f"FPS: {fps:.1f}",
                     (frame.shape[1]-115, frame.shape[0]-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180,180,180), 1)
+      
