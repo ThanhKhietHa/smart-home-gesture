@@ -1,3 +1,36 @@
+"""
+face_auth.py — Face Recognition + Centroid Tracker (Sticky ID)
+==============================================================
+
+Architecture — 3 layers:
+
+  Layer 1  DETECT   (every frame, lightweight)
+           MediaPipe finds face bounding box + landmarks.
+           Cost: ~2ms — always runs.
+
+  Layer 2  TRACK    (every frame, near-zero cost)
+           CentroidTracker matches box to known track by IOU.
+           If match found → update position, skip recognition.
+           If new/unmatched face → trigger Layer 3.
+
+  Layer 3  IDENTIFY (only on new face OR every N frames, expensive)
+           Full landmark comparison against enrolled DB.
+           Cost: ~40ms — runs as rarely as possible.
+
+Grace period:
+  When tracked face disappears, a countdown starts.
+  If face reappears within GRACE_FRAMES → stay unlocked (no re-scan).
+  If countdown expires → re-lock and reset tracker.
+
+Periodic re-verify:
+  Even while tracked, re-runs identification every REVERIFY_FRAMES.
+  Catches face-swap attacks (person walks away, different person steps in).
+  If re-verify fails → immediate re-lock.
+
+State machine (unchanged from previous version):
+  RECOGNISE → TYPING → ENROLLING → RECOGNISE
+"""
+
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -17,21 +50,18 @@ import config
 GRACE_FRAMES    = 40    # ~2s at 20fps — frames before re-locking when face lost
 IOU_THRESHOLD   = 0.30  # minimum IOU to consider same face across frames
 
-_face_result_lock = __import__('threading').Lock()
-_latest_face_result = None
+# NOTE: Periodic re-verify is DISABLED per user preference.
+# Recognition only runs when:
+#   1. Face first enters frame (new track, not yet unlocked)
+#   2. System is locked and scanning for a match
+# Once unlocked, tracker holds identity until face is fully lost.
 
-def _face_result_callback(result, image, timestamp_ms):
-    global _latest_face_result
-    with _face_result_lock:
-        _latest_face_result = result
-
-# Change options:
+# =====================================================================
+# MEDIAPIPE
+# =====================================================================
 _face_options = vision.FaceLandmarkerOptions(
-    base_options=python.BaseOptions(
-        model_asset_path=config.FACE_MODEL_PATH
-    ),
-    running_mode=vision.RunningMode.LIVE_STREAM,  # ← KEY CHANGE
-    result_callback=_face_result_callback,
+    base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
+    running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
     min_face_detection_confidence=0.4,
     min_face_presence_confidence=0.4,
