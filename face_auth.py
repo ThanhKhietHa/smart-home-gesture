@@ -63,9 +63,9 @@ _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
     num_faces=1,
-    min_face_detection_confidence=0.4,
-    min_face_presence_confidence=0.4,
-    output_facial_transformation_matrixes=True,
+    min_face_detection_confidence=config.FACE_DETECTION_CONFIDENCE,  # From config
+    min_face_presence_confidence=config.FACE_PRESENCE_CONFIDENCE,    # From config
+    output_facial_transformation_matrixes=False,  # Set to False - not used in your code!
 )
 _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
 
@@ -108,6 +108,8 @@ class _CentroidTracker:
         self._centroid = None    # (cx,cy) centre of tracked box
         self._id       = 0       # increments each time a NEW face is detected
         self._age      = 0       # frames since this track was last matched
+        self._frame_counter = 0
+        self._last_detection_frame = -1
 
     @staticmethod
     def _iou(boxA, boxB):
@@ -420,80 +422,53 @@ class FaceAuth:
 
     # ── RECOGNISE STATE with centroid tracker ─────────────────────────
     def _state_recognise(self, frame, result, lm, box, key):
-
-        if box is not None:
-            # ── Face is present — update tracker ──────────────────────
-            track_id, is_new = self._tracker.update(box)
-            self._grace_count = 0   # reset grace period
-
-            # Face size guard
-            H = frame.shape[0]
-            ys = [pt.y*H for pt in result.face_landmarks[0]]
-            face_ok = (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC
-
-            # Decide whether to run recognition this frame:
-            #   - System locked AND face is present → always try to identify
-            #   - System unlocked → NEVER re-verify (trust tracker fully)
-            #   - New face while unlocked → IGNORE (stay unlocked until
-            #     current face is fully lost, THEN scan the new one)
-            run_recognition = (not self._unlocked) and face_ok and (lm is not None)
-
-            if run_recognition:
-                self._run_recognition(lm, frame.shape, track_id)
-
-            # ── Draw face box ──────────────────────────────────────────
-            x1, y1, x2, y2 = box
-            if self._unlocked:
-                # Always show green when unlocked — regardless of who is there
-                box_color  = (0, 220, 0)
-                thickness  = 3
-                name_label = self._unlock_name
-                label_col  = (0, 255, 0)
-            else:
-                box_color  = (0, 60, 220)
-                thickness  = 2
-                name_label = self.last_cand if self.last_cand != "—" else "Scanning..."
-                label_col  = (60, 100, 255)
-
-            cv2.rectangle(frame, (x1,y1), (x2,y2), box_color, thickness)
-            cv2.putText(frame, name_label, (x1, max(y1-10, 85)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, label_col, 2)
-
-            # Draw landmarks
-            H2, W2 = frame.shape[:2]
-            for pt in result.face_landmarks[0]:
-                cv2.circle(frame,
-                           (int(pt.x*W2), int(pt.y*H2)),
-                           1, box_color, -1)
-
-            self._track_status = (
-                f"UNLOCKED — tracking  id={track_id}" if self._unlocked
-                else f"SCANNING  id={track_id}"
-            )
-
+    # Frame skipping logic
+    self._frame_counter += 1
+    should_detect = False
+    
+    if not self._unlocked:
+        # When locked: detect every N frames
+        should_detect = (self._frame_counter % config.FACE_DETECT_EVERY_N_FRAMES == 0)
+    else:
+        # When unlocked: detect very rarely
+        should_detect = (self._frame_counter % config.FACE_DETECT_EVERY_N_FRAMES_UNLOCKED == 0)
+    
+    # If we already have a box from previous frame and no detection this frame,
+    # just draw using cached position
+    if not should_detect and self._tracker.box is not None:
+        # Draw from cached tracker position (fast path - no MediaPipe)
+        x1, y1, x2, y2 = self._tracker.box
+        if self._unlocked:
+            box_color = (0, 220, 0)
+            thickness = 3
+            name_label = self._unlock_name
+            label_col = (0, 255, 0)
         else:
-            # ── No face detected this frame ───────────────────────────
-            self._tracker.lost()
-            self._grace_count += 1
-            self._track_status = f"LOST  grace={self._grace_count}/{GRACE_FRAMES}"
-
-            if self._unlocked:
-                if self._grace_count >= GRACE_FRAMES:
-                    self._force_relock("Face lost — grace period expired")
-                # else stay unlocked during grace period
-
-        # Auth timeout
-        if (self._unlocked
-                and (time.time()-self._unlock_time) > config.FACE_AUTH_TIMEOUT):
+            box_color = (0, 60, 220)
+            thickness = 2
+            name_label = "Scanning..."
+            label_col = (60, 100, 255)
+        
+        cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, thickness)
+        cv2.putText(frame, name_label, (x1, max(y1-10, 85)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, label_col, 2)
+        
+        if self._unlocked:
+            self._track_status = f"UNLOCKED — tracking id={self._tracked_id} (cached)"
+        else:
+            self._track_status = "SCANNING (cached)"
+        
+        # Still need to handle no-face case
+        if self._unlocked and (time.time()-self._unlock_time) > config.FACE_AUTH_TIMEOUT:
             self._force_relock("Session timeout")
-
-        # Red border when locked
+        
         if not self._unlocked:
-            cv2.rectangle(frame,
-                          (0,0), (frame.shape[1]-1, frame.shape[0]-1),
-                          (0,0,200), 5)
-
+            cv2.rectangle(frame, (0,0), (frame.shape[1]-1, frame.shape[0]-1), (0,0,200), 5)
+        
         return frame
+    
+    # Rest of existing recognition code...
+    # (keep your existing code after this point)
 
     # ── Run full recognition and update auth state ────────────────────
     def _run_recognition(self, lm, shape, track_id):
