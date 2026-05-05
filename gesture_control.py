@@ -313,24 +313,34 @@ class GestureControl:
         else:
             self.device_states[device] = 1 if action == "on" else 0
 
-    # ── Device panel (bottom-left) ────────────────────────────────────
+    # ── Device panel (bottom-right, compact, no black fill) ───────────
     def _draw_devices(self, frame):
-        H   = frame.shape[0]
-        n   = len(self.device_states)
-        y0  = H - 10 - n * 26
-        cv2.rectangle(frame, (0, y0-8), (215, H), (20,20,20), -1)
-        y = y0
+        H, W = frame.shape[:2]
+        n    = len(self.device_states)
+        lh   = 20   # line height
+        pw   = 160  # panel width
+        ph   = n * lh + 8
+        x0   = W - pw - 4
+        y0   = H - ph - 4
+
+        # Thin semi-transparent background
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x0, y0), (W - 2, H - 2), (15, 15, 15), -1)
+        cv2.addWeighted(overlay, 0.50, frame, 0.50, 0, frame)
+
+        y = y0 + lh
         for dev, state in self.device_states.items():
             if isinstance(state, str):
                 label = state.upper()
-                color = (0,200,0) if state not in ("stopped","off","close") \
-                        else (80,80,80)
+                color = (0, 200, 0) if state not in ("stopped", "off", "close") \
+                        else (80, 80, 80)
             else:
                 label = "ON" if state else "OFF"
-                color = (0,220,0) if state else (80,80,80)
+                color = (0, 210, 0) if state else (80, 80, 80)
             cv2.putText(frame, f"{dev.capitalize()}: {label}",
-                        (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.60, color, 1)
-            y += 26
+                        (x0 + 5, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
+            y += lh
 
     # ── Reset all gesture state ───────────────────────────────────────
     def _reset(self):
@@ -347,3 +357,4 @@ class GestureControl:
         cv2.putText(frame, f"FPS: {fps:.1f}",
                     (frame.shape[1]-115, frame.shape[0]-10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180,180,180), 1)
+      
