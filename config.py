@@ -24,8 +24,8 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # CAMERA
 # =====================================================================
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 320    # Keep at 320x240 for balance
-CAMERA_HEIGHT = 240    # Change to 160x120 for 25+ FPS
+CAMERA_WIDTH  = 640   # Keep at 320x240 for balance
+CAMERA_HEIGHT = 320   # Change to 160x120 for 25+ FPS
 CAMERA_FPS    = 30
 
 # =====================================================================
