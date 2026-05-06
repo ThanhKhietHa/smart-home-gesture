@@ -25,32 +25,28 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # CAMERA — OPTIMIZED for Jetson Orin Nano
 # =====================================================================
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640    # Changed from 640x360 (640x360 is too slow)
-CAMERA_HEIGHT = 360   # 320x240 gives 2x better FPS
+CAMERA_WIDTH  = 640
+CAMERA_HEIGHT = 360
 CAMERA_FPS    = 30
 
 # =====================================================================
-# PERFORMANCE OPTIMIZATIONS (Add these for better FPS)
+# PERFORMANCE OPTIMIZATIONS
 # =====================================================================
-# Frame skipping - run detection less often for higher FPS
-FACE_PROCESS_EVERY_N_FRAMES_LOCKED = 2      # Process every 2nd frame when locked
-FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED = 90   # Process every 90th frame when unlocked
-GESTURE_PROCESS_EVERY_N_FRAMES = 2          # Process every 2nd frame when unlocked
+FACE_PROCESS_EVERY_N_FRAMES_LOCKED = 2
+FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED = 90
+GESTURE_PROCESS_EVERY_N_FRAMES = 2
 
-# MediaPipe confidence (lower = faster, slightly less accurate)
-FACE_DETECTION_CONFIDENCE = 0.35   # Default was 0.5
-FACE_PRESENCE_CONFIDENCE = 0.35    # Default was 0.5
+FACE_DETECTION_CONFIDENCE = 0.35
+FACE_PRESENCE_CONFIDENCE = 0.35
 
 # =====================================================================
-# MQTT — Shiftr.io cloud broker (FIXED)
+# MQTT — Shiftr.io cloud broker
 # =====================================================================
-# IMPORTANT: Your broker address MUST be: your-namespace.cloud.shiftr.io
-# Note the "cloud" in the URL - this is critical!
-MQTT_BROKER          = "khiet1111.cloud.shiftr.io"      # Fixed: added "cloud"
+MQTT_BROKER          = "khiet1111.cloud.shiftr.io"
 MQTT_PORT            = 1883
 MQTT_TOPIC_BASE      = "/smart_home/"
-MQTT_USER            = "khiet1111"                  # Token Key from Shiftr.io
-MQTT_PASSWORD        = "khiet"                      # Token Secret from Shiftr.io
+MQTT_USER            = "khiet1111"
+MQTT_PASSWORD        = "khiet"
 MQTT_RECONNECT_DELAY = 3.0
 
 # =====================================================================
@@ -68,15 +64,15 @@ FACE_MIN_HEIGHT_FRAC = 0.20
 # =====================================================================
 # GESTURE RECOGNITION
 # =====================================================================
-HAND_DETECTION_CONFIDENCE = 0.5    # Reduced from 0.6 for speed
-HAND_TRACKING_CONFIDENCE  = 0.4    # Reduced from 0.5
+HAND_DETECTION_CONFIDENCE = 0.5
+HAND_TRACKING_CONFIDENCE  = 0.4
 
-GESTURE_HOLD_TIME    = 1.5   # Reduced from 2.0 for faster response
-CONFIRM_HOLD_TIME    = 0.6   # Reduced from 0.8
-CONFIRM_ENTRY_DELAY  = 0.6   # Reduced from 0.8
+GESTURE_HOLD_TIME    = 1.5
+CONFIRM_HOLD_TIME    = 0.6
+CONFIRM_ENTRY_DELAY  = 0.6
 
 # =====================================================================
-# DEVICE → GESTURE MAPPING
+# DEVICE → GESTURE MAPPING (Updated - Removed fan/curtains gestures)
 # =====================================================================
 GESTURE_COMMANDS = {
     "Open Palm":     ("lights",   "on"),
@@ -84,19 +80,15 @@ GESTURE_COMMANDS = {
     "Peace Sign":    ("door",     "toggle"),
     "Pointing Up":   ("ac",       "off"),
     "Pointing Down": ("ac",       "on"),
-    "Three Fingers": ("fan",      "on"),
-    "Four Fingers":  ("fan",      "off"),
-    "Pinch":         ("curtains", "open"),
-    "Spread":        ("curtains", "close"),
     "Thumb Up":      ("window",   "roll_up"),
     "Thumb Down":    ("window",   "roll_down"),
 }
 
 DEVICE_INITIAL_STATES = {
     "lights":   0,
-    "fan":      0,
+    "fan":      0,      # Kept for compatibility (won't be used)
     "door":     0,
     "ac":       0,
-    "curtains": "stopped",
+    "curtains": "stopped",  # Kept for compatibility
     "window":   "stopped",
 }
