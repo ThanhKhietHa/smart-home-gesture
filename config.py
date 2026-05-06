@@ -26,8 +26,8 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # =====================================================================
 # USB camera (Kisonli HD 1080) on Jetson / Windows
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 320    # 320x240 gives best FPS on Jetson at 15W
-CAMERA_HEIGHT = 240    # raise to 640x480 only if FPS > 20
+CAMERA_WIDTH  = 640    # 320x240 gives best FPS on Jetson at 15W
+CAMERA_HEIGHT = 360    # raise to 640x480 only if FPS > 20
 CAMERA_FPS    = 30
 
 # =====================================================================
