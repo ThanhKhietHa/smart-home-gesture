@@ -1,4 +1,15 @@
-
+"""
+face_auth.py — Face Recognition + Centroid Tracker (Sticky ID)
+==============================================================
+FIXES in this version:
+  1. DEADLOCK FIXED — removed second landmarker in _start_enroll().
+     Now uses the single LIVE_STREAM landmarker for both recognition
+     AND enrollment. No two MediaPipe instances ever run simultaneously.
+  2. TIMESTAMP FIXED — _ts now increments every process_frame() call
+     regardless of state, preventing LIVE_STREAM from stalling.
+  3. draw_debug FIXED — removed frame.copy()+addWeighted overhead,
+     replaced with direct semi-transparent rectangle (no full copy).
+"""
 
 import cv2
 import mediapipe as mp
@@ -597,5 +608,3 @@ class FaceAuth:
             cv2.putText(frame,text,(x0+5,y0+14+i*18),
                         cv2.FONT_HERSHEY_SIMPLEX,0.42,color,1)
         return frame
-PYEOF
-echo "face_auth done"
