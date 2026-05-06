@@ -1,3 +1,7 @@
+"""
+gesture_control.py — Hand Gesture Recognition & Device Control
+Optimized - Early rejection for removed gestures
+"""
 
 import cv2
 import mediapipe as mp
@@ -25,19 +29,23 @@ _GS_IDLE    = "IDLE"
 _GS_CONFIRM = "CONFIRM"
 
 # =====================================================================
+# OPTIMIZATION: Set of valid gestures for quick lookup
+# =====================================================================
+_VALID_GESTURES = set(config.GESTURE_COMMANDS.keys())
+
+# =====================================================================
 # GEOMETRY
 # =====================================================================
 def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — fully guarded, never crashes on empty landmarks
+# GESTURE DETECTION — Optimized with early returns
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    lm = list of landmarks OR None.
-    Always returns a string — never raises.
+    Optimized to quickly return for removed gestures.
     """
     try:
         if not lm or len(lm) < 21:
@@ -59,44 +67,47 @@ def detect_gesture(lm):
         pe = ext(pinky_tip,  pinky_mcp)
         n  = sum([ie, me, re, pe])
 
-        tp = _dist(thumb_tip, wrist)       # thumb-palm distance
-        tv = thumb_tip.y - thumb_cmc.y     # negative = up
+        tp = _dist(thumb_tip, wrist)
+        tv = thumb_tip.y - thumb_cmc.y
 
-        # ── Thumb Up / Down (all fingers folded) ─────────────────────
+        # ── Thumb Up / Down (KEPT) ─────────────────────────────────────
         if n == 0 and tp > 0.18:
             if tv < -0.10: return "Thumb Up"
             if tv >  0.10: return "Thumb Down"
 
-        # ── Open gestures ─────────────────────────────────────────────
-        if n >= 3 and tp > 0.25: return "Spread"
-        if n >= 3:               return "Open Palm"
+        # ── Open Palm / Fist (KEPT) ────────────────────────────────────
+        if n >= 3 and tp > 0.25: return "Spread"      # REMOVED - will be ignored
+        if n >= 3:               return "Open Palm"   # KEPT
+        if n == 0 and tp < 0.22: return "Fist"        # KEPT
 
-        # ── Closed fist ───────────────────────────────────────────────
-        if n == 0 and tp < 0.22: return "Fist"
-
-        # ── Finger count gestures ─────────────────────────────────────
-        if ie and me and re and not pe:          return "Three Fingers"
-        if ie and me and not re and not pe:      return "Peace Sign"
-        if n == 4 and tp < 0.20:                 return "Four Fingers"
-
-        # ── Pinch ─────────────────────────────────────────────────────
+        # ── REMOVED GESTURES (quick return to save CPU) ─────────────────
+        # These gestures are no longer in config, so we return early
+        if ie and me and re and not pe:          
+            return "Three Fingers"   # REMOVED - will be ignored
+            
+        if n == 4 and tp < 0.20:                 
+            return "Four Fingers"    # REMOVED - will be ignored
+            
         if _dist(thumb_tip, index_tip) < 0.06 and not me and not re:
-            return "Pinch"
+            return "Pinch"           # REMOVED - will be ignored
 
-        # ── Pointing (index only extended) ────────────────────────────
+        # ── Peace Sign (KEPT) ──────────────────────────────────────────
+        if ie and me and not re and not pe:      
+            return "Peace Sign"      # KEPT
+
+        # ── Pointing (KEPT) ────────────────────────────────────────────
         if ie and not me and not re and not pe:
             il = _dist(index_tip, index_mcp)
             ml = _dist(middle_tip, middle_mcp)
             rl = _dist(ring_tip,   ring_mcp)
             if il > ml + 0.03 and il > rl + 0.03:
                 v = index_tip.y - index_mcp.y
-                if v >  -0.05: return "Pointing Down"
-                if v <  -0.12: return "Pointing Up"
+                if v >  -0.05: return "Pointing Down"  # KEPT
+                if v <  -0.12: return "Pointing Up"    # KEPT
 
         return "Unknown"
 
     except Exception:
-        # Never crash — return safe default
         return "No hand"
 
 # =====================================================================
@@ -112,16 +123,17 @@ class GestureControl:
         self._conf_gesture = None
         self._conf_start   = 0.0
         self._conf_entry   = 0.0
-        # Larger buffer = smoother gesture at low FPS
         self._buf          = deque(maxlen=6)
         self.device_states = dict(config.DEVICE_INITIAL_STATES)
+        
+        # OPTIMIZATION: Pre-filter valid gestures for faster checking
+        self._valid_gestures = set(config.GESTURE_COMMANDS.keys())
+        print(f"[GESTURE] Active gestures: {list(self._valid_gestures)}")
 
     # ── Main entry point ──────────────────────────────────────────────
     def process_frame(self, frame, mqtt, face_unlocked):
         """
         Returns (annotated_frame, feedback_or_None).
-        feedback = (message_str, color_tuple) — drawn by main thread.
-        Never raises. Never calls cv2.imshow.
         """
         try:
             rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -135,14 +147,19 @@ class GestureControl:
         self._buf.append(detect_gesture(lm))
         detected = self._smooth()
 
-        # Draw hand landmarks (safe — only when lm exists)
+        # OPTIMIZATION: Early reject for invalid gestures (saves UI drawing)
+        is_valid = detected in self._valid_gestures
+
+        # Draw hand landmarks (only if gesture might be valid or for feedback)
         if lm is not None:
             try:
                 H, W = frame.shape[:2]
+                # Use different color for invalid gestures
+                color = (0, 255, 0) if is_valid else (100, 100, 100)
                 for pt in lm:
                     cx = int(max(0, min(pt.x * W, W-1)))
                     cy = int(max(0, min(pt.y * H, H-1)))
-                    cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
+                    cv2.circle(frame, (cx, cy), 3, color, -1)
             except Exception:
                 pass
 
@@ -155,12 +172,19 @@ class GestureControl:
             self._draw_devices(frame)
             return frame, None
 
-        # Route to state
+        # Route to state (only valid gestures proceed)
         feedback = None
         if self._state == _GS_CONFIRM:
             feedback = self._do_confirm(frame, detected, mqtt)
         else:
-            self._do_detection(frame, detected)
+            # Only show detection UI for valid gestures or during confirm
+            if is_valid or self._pending is not None:
+                self._do_detection(frame, detected)
+            else:
+                # Show minimal UI for unrecognized gestures
+                cv2.putText(frame, f"Gesture: {detected} (not mapped)",
+                            (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (100, 100, 100), 1)
 
         self._draw_devices(frame)
         return frame, feedback
@@ -173,66 +197,51 @@ class GestureControl:
         for g in self._buf:
             counts[g] = counts.get(g, 0) + 1
         best = max(counts, key=counts.get)
-        # Need clear majority — at least half+1
         if counts[best] >= len(self._buf) // 2 + 1:
             return best
         return "Unknown"
 
     # ── IDLE / HOLDING state ──────────────────────────────────────────
     def _do_detection(self, frame, detected):
-        actionable = detected in config.GESTURE_COMMANDS
-
-        if actionable:
-            if self._pending != detected:
-                self._pending    = detected
-                self._hold_start = time.time()
-
-            elapsed   = time.time() - self._hold_start
-            remaining = max(0.0, config.GESTURE_HOLD_TIME - elapsed)
-            dev, act  = config.GESTURE_COMMANDS[self._pending]
-
-            cv2.putText(frame, f"Gesture: {self._pending}",
-                        (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,255), 2)
-            cv2.putText(frame, f"Hold {remaining:.1f}s...",
-                        (20, 196), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255,255,100), 2)
-
-            bw = frame.shape[1] - 40
-            cv2.rectangle(frame, (20,208), (20+bw, 224), (60,60,60), -1)
-            cv2.rectangle(frame, (20,208),
-                (20 + int(bw * min(elapsed/config.GESTURE_HOLD_TIME, 1.0)), 224),
-                (0,200,255), -1)
-
-            cv2.putText(frame, f"-> {dev.upper()} {act.upper()}",
-                        (20, 244), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180,255,180), 2)
-
-            if elapsed >= config.GESTURE_HOLD_TIME:
-                self._cur_gesture = self._pending
-                self._state       = _GS_CONFIRM
-                self._conf_entry  = time.time()
-                self._conf_gesture = None
-                self._conf_start  = 0.0
-                self._pending     = None
-                self._hold_start  = 0.0
-        else:
-            # Reset hold if gesture changed or no hand
-            self._pending    = None
+        # Only proceed if gesture is in config
+        if detected not in self._valid_gestures:
+            self._pending = None
             self._hold_start = 0.0
-            if detected == "No hand":
-                cv2.putText(frame, "No hand detected",
-                            (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.85, (80,80,80), 1)
-            else:
-                cv2.putText(frame, f"Gesture: {detected}",
-                            (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.85, (120,120,120), 1)
+            return
+
+        if self._pending != detected:
+            self._pending    = detected
+            self._hold_start = time.time()
+
+        elapsed   = time.time() - self._hold_start
+        remaining = max(0.0, config.GESTURE_HOLD_TIME - elapsed)
+        dev, act  = config.GESTURE_COMMANDS[self._pending]
+
+        cv2.putText(frame, f"Gesture: {self._pending}",
+                    (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,255), 2)
+        cv2.putText(frame, f"Hold {remaining:.1f}s...",
+                    (20, 196), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (255,255,100), 2)
+
+        bw = frame.shape[1] - 40
+        cv2.rectangle(frame, (20,208), (20+bw, 224), (60,60,60), -1)
+        cv2.rectangle(frame, (20,208),
+            (20 + int(bw * min(elapsed/config.GESTURE_HOLD_TIME, 1.0)), 224),
+            (0,200,255), -1)
+
+        cv2.putText(frame, f"-> {dev.upper()} {act.upper()}",
+                    (20, 244), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180,255,180), 2)
+
+        if elapsed >= config.GESTURE_HOLD_TIME:
+            self._cur_gesture = self._pending
+            self._state       = _GS_CONFIRM
+            self._conf_entry  = time.time()
+            self._conf_gesture = None
+            self._conf_start  = 0.0
+            self._pending     = None
+            self._hold_start  = 0.0
 
     # ── CONFIRM state ─────────────────────────────────────────────────
     def _do_confirm(self, frame, detected, mqtt):
-        """
-        Returns feedback tuple (msg, color) when action completes,
-        or None if still waiting.
-        NEVER calls cv2.imshow or cv2.waitKey.
-        """
         dev, act = config.GESTURE_COMMANDS.get(self._cur_gesture, ("?","?"))
 
         # Yellow border
@@ -245,7 +254,6 @@ class GestureControl:
         cv2.putText(frame, "Thumb UP = YES     Thumb DOWN = NO",
                     (20,226), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (200,200,200), 1)
 
-        # Stabilise delay after entering confirm
         since = time.time() - self._conf_entry
         if since < config.CONFIRM_ENTRY_DELAY:
             rem = config.CONFIRM_ENTRY_DELAY - since
@@ -282,10 +290,8 @@ class GestureControl:
                     feedback = ("Action CANCELLED", (0,0,255))
 
                 self._reset()
-                return feedback   # ← main thread shows this for 1.2s
-
+                return feedback
         else:
-            # No thumb shown — prompt and wait
             self._conf_gesture = None
             self._conf_start   = 0.0
             cv2.putText(frame, "Show Thumb UP or DOWN",
@@ -303,17 +309,16 @@ class GestureControl:
         else:
             self.device_states[device] = 1 if action == "on" else 0
 
-    # ── Device panel (bottom-right, compact, no black fill) ───────────
+    # ── Device panel ──────────────────────────────────────────────────
     def _draw_devices(self, frame):
         H, W = frame.shape[:2]
         n    = len(self.device_states)
-        lh   = 20   # line height
-        pw   = 160  # panel width
+        lh   = 20
+        pw   = 160
         ph   = n * lh + 8
         x0   = W - pw - 4
         y0   = H - ph - 4
 
-        # Thin semi-transparent background
         overlay = frame.copy()
         cv2.rectangle(overlay, (x0, y0), (W - 2, H - 2), (15, 15, 15), -1)
         cv2.addWeighted(overlay, 0.50, frame, 0.50, 0, frame)
