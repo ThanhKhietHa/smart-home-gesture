@@ -92,3 +92,12 @@ DEVICE_INITIAL_STATES = {
     "curtains": "stopped",
     "window":   "stopped",
 }
+MQTT_BROKER         = "khiet.cloud.shiftr.io"  # Your namespace
+MQTT_PORT           = 1883
+MQTT_TOPIC_BASE     = "/smart_home/"
+
+# IMPORTANT: Replace these with your actual Shiftr.io token
+MQTT_USER           = "khiet1111"      # Token Key from Shiftr
+MQTT_PASSWORD       = "khiet"   # Token Secret from Shiftr
+
+MQTT_RECONNECT_DELAY = 3.0
