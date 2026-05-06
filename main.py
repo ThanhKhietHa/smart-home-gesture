@@ -108,6 +108,13 @@ class SharedState:
 # FACE THREAD
 # =====================================================================
 def face_thread(face, buf, state, stop_event):
+    """
+    Smart scheduling:
+      LOCKED   → run face every frame (identify user ASAP)
+      UNLOCKED → run face every 90 frames to check if user left
+                 BUT always write latest raw frame so gesture thread
+                 has a fresh base — prevents visual freeze
+    """
     frame_n = 0
     while not stop_event.is_set():
         raw = buf.read_raw()
@@ -119,12 +126,14 @@ def face_thread(face, buf, state, stop_event):
         key      = state.get_key()
         unlocked = state.is_unlocked()
 
+        # When unlocked — skip heavy recognition but keep frame buffer fresh
         if unlocked and frame_n % 90 != 0 and key == -1:
-            # Still write raw frame so gesture thread has a fresh base
-            buf.write_face(raw)   # ← ADD THIS LINE
+            buf.write_face(raw)        # ← keeps gesture thread from freezing
             time.sleep(0.005)
             continue
 
+        # Put key back if we consumed it but are about to skip
+        # (shouldn't happen with above logic but safety net)
         frame = face.process_frame(raw, key)
         face.handle_key(key)
         state.set_auth(face.is_unlocked(), face.unlocked_name())
