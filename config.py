@@ -32,7 +32,7 @@ CAMERA_FPS    = 30
 # =====================================================================
 # MQTT — Shiftr.io cloud broker
 # =====================================================================
-MQTT_BROKER          = "khiet.cloud.shiftr.io"
+MQTT_BROKER          = "khiet1111.cloud.shiftr.io"
 MQTT_PORT            = 1883
 MQTT_TOPIC_BASE      = "/smart_home/"
 MQTT_USER            = "khiet1111"   # Token Key from Shiftr.io
