@@ -29,7 +29,7 @@ import config
 # =====================================================================
 # TRACKER CONSTANTS
 # =====================================================================
-GRACE_FRAMES  = 40    # ~4s at 10fps before re-locking when face lost
+GRACE_FRAMES  = 2    # ~4s at 10fps before re-locking when face lost
 IOU_THRESHOLD = 0.30
 
 # =====================================================================
