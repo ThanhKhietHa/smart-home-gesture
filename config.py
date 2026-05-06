@@ -24,48 +24,42 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # =====================================================================
 # CAMERA
 # =====================================================================
-# USB camera (Kisonli HD 1080) on Jetson / Windows
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640    # 320x240 gives best FPS on Jetson at 15W
-CAMERA_HEIGHT = 360    # raise to 640x480 only if FPS > 20
+CAMERA_WIDTH  = 640
+CAMERA_HEIGHT = 360
 CAMERA_FPS    = 30
 
 # =====================================================================
-# MQTT
+# MQTT — Shiftr.io cloud broker
 # =====================================================================
-MQTT_BROKER         = "localhost"   # change to ESP32 broker IP if needed
-MQTT_PORT           = 1883
-MQTT_TOPIC_BASE     = "/smart_home/"
+MQTT_BROKER          = "khiet.cloud.shiftr.io"
+MQTT_PORT            = 1883
+MQTT_TOPIC_BASE      = "/smart_home/"
+MQTT_USER            = "khiet1111"   # Token Key from Shiftr.io
+MQTT_PASSWORD        = "khiet"       # Token Secret from Shiftr.io
 MQTT_RECONNECT_DELAY = 3.0
 
 # =====================================================================
 # FACE RECOGNITION
 # =====================================================================
-# Tuned for KHIET's debug panel readings:
-#   KHIET:   Shape=0.067  Cosine=0.003
-#   Stranger: Shape=0.144  Cosine=0.014
-# Thresholds set midway between the two:
-FACE_SHAPE_THRESHOLD    = 0.10   # midpoint: 0.067 < 0.10 < 0.144
-FACE_IDENTITY_THRESHOLD = 0.008  # midpoint: 0.003 < 0.008 < 0.014
+FACE_SHAPE_THRESHOLD    = 0.10
+FACE_IDENTITY_THRESHOLD = 0.008
 
-# If getting false rejects → raise by 0.01
-# If getting false accepts → lower by 0.01
-
-FACE_CONFIRM_FRAMES  = 5      # consecutive match frames to unlock (lower = faster)
-FACE_RELOCK_FRAMES   = 25     # consecutive no-match frames to re-lock
-FACE_ENROLL_TARGET   = 40     # good frames per enrollment
-FACE_AUTH_TIMEOUT    = 300.0  # seconds before auto re-lock
-FACE_MIN_HEIGHT_FRAC = 0.20   # face must fill 20% of frame height (relaxed for USB)
+FACE_CONFIRM_FRAMES  = 5
+FACE_RELOCK_FRAMES   = 25
+FACE_ENROLL_TARGET   = 40
+FACE_AUTH_TIMEOUT    = 300.0
+FACE_MIN_HEIGHT_FRAC = 0.20
 
 # =====================================================================
 # GESTURE RECOGNITION
 # =====================================================================
 HAND_DETECTION_CONFIDENCE = 0.6
-HAND_TRACKING_CONFIDENCE  = 0.5   # slightly relaxed for lower FPS
+HAND_TRACKING_CONFIDENCE  = 0.5
 
-GESTURE_HOLD_TIME    = 2.0   # seconds hold before confirm screen
-CONFIRM_HOLD_TIME    = 0.8   # seconds hold thumb to confirm
-CONFIRM_ENTRY_DELAY  = 0.8   # stabilise delay after entering confirm
+GESTURE_HOLD_TIME    = 2.0
+CONFIRM_HOLD_TIME    = 0.8
+CONFIRM_ENTRY_DELAY  = 0.8
 
 # =====================================================================
 # DEVICE → GESTURE MAPPING
@@ -92,12 +86,3 @@ DEVICE_INITIAL_STATES = {
     "curtains": "stopped",
     "window":   "stopped",
 }
-MQTT_BROKER         = "khiet.cloud.shiftr.io"  # Your namespace
-MQTT_PORT           = 1883
-MQTT_TOPIC_BASE     = "/smart_home/"
-
-# IMPORTANT: Replace these with your actual Shiftr.io token
-MQTT_USER           = "khiet1111"      # Token Key from Shiftr
-MQTT_PASSWORD       = "khiet"   # Token Secret from Shiftr
-
-MQTT_RECONNECT_DELAY = 3.0
