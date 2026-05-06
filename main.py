@@ -108,13 +108,6 @@ class SharedState:
 # FACE THREAD
 # =====================================================================
 def face_thread(face, buf, state, stop_event):
-    """
-    Smart scheduling:
-      LOCKED   → run face every frame (need to identify user ASAP)
-      UNLOCKED → run face every 90 frames (~4.5s at 20fps)
-                 just enough to detect if user has left
-    This frees ~45ms per frame for gesture when unlocked.
-    """
     frame_n = 0
     while not stop_event.is_set():
         raw = buf.read_raw()
@@ -123,12 +116,12 @@ def face_thread(face, buf, state, stop_event):
             continue
 
         frame_n += 1
-        key = state.get_key()
+        key      = state.get_key()
         unlocked = state.is_unlocked()
 
-        # When unlocked — face only needed occasionally to check if user left
-        # Grace period handles short absences so 90-frame interval is safe
         if unlocked and frame_n % 90 != 0 and key == -1:
+            # Still write raw frame so gesture thread has a fresh base
+            buf.write_face(raw)   # ← ADD THIS LINE
             time.sleep(0.005)
             continue
 
