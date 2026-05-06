@@ -1,17 +1,4 @@
-"""
-face_auth.py — Face Recognition + Centroid Tracker (Sticky ID)
-==============================================================
-LIVE_STREAM mode:
-  detect_async() is non-blocking (0.35ms call time).
-  Results arrive via callback in background.
-  This frees the face thread to immediately process the next frame
-  instead of blocking 31ms waiting for IMAGE mode to return.
-  Even though camera limits to ~10 FPS, LIVE_STREAM reduces
-  CPU idle time and makes the system more responsive.
 
-State machine:
-  RECOGNISE → TYPING → ENROLLING → RECOGNISE
-"""
 
 import cv2
 import mediapipe as mp
@@ -29,24 +16,24 @@ import config
 # =====================================================================
 # TRACKER CONSTANTS
 # =====================================================================
-GRACE_FRAMES  = 40    # ~4s at 10fps before re-locking when face lost
+GRACE_FRAMES  = 40
 IOU_THRESHOLD = 0.30
 
 # =====================================================================
 # LIVE_STREAM RESULT STORAGE
+# Single global result — used by both recognition AND enrollment
 # =====================================================================
 _face_lock          = threading.Lock()
 _latest_face_result = None
-_latest_face_ts     = 0
 
 def _face_callback(result, image, timestamp_ms):
-    global _latest_face_result, _latest_face_ts
+    global _latest_face_result
     with _face_lock:
         _latest_face_result = result
-        _latest_face_ts     = timestamp_ms
 
 # =====================================================================
-# MEDIAPIPE — LIVE_STREAM mode
+# MEDIAPIPE — single LIVE_STREAM instance for entire program lifetime
+# NEVER create a second instance — causes TFLite mutex deadlock on Jetson
 # =====================================================================
 _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(
@@ -60,7 +47,6 @@ _face_options = vision.FaceLandmarkerOptions(
     output_facial_transformation_matrixes=True,
 )
 _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
-_face_ts    = 0   # monotonically increasing timestamp for detect_async
 
 # =====================================================================
 # APP STATES
@@ -146,9 +132,9 @@ def _kb_hittest(fh, fw, mx, my, typed):
 # =====================================================================
 class _CentroidTracker:
     def __init__(self):
-        self._box      = None
-        self._id       = 0
-        self._age      = 0
+        self._box = None
+        self._id  = 0
+        self._age = 0
 
     @staticmethod
     def _iou(a, b):
@@ -161,7 +147,6 @@ class _CentroidTracker:
         return inter/float(aA+aB-inter+1e-6)
 
     def update(self, box):
-        """Returns (track_id, is_new_face)."""
         if box is None:
             self._age += 1
             return self._id, False
@@ -175,15 +160,11 @@ class _CentroidTracker:
         self._id += 1
         return self._id, True
 
-    def lost(self):
-        self._age += 1
-
-    def reset(self):
-        self._box = None; self._age = 0
+    def lost(self):   self._age += 1
+    def reset(self):  self._box = None; self._age = 0
 
     @property
     def age(self): return self._age
-
     @property
     def box(self): return self._box
 
@@ -280,7 +261,7 @@ class FaceAuth:
         self._db           = _load_db()
         self._state        = _ST_RECOGNISE
 
-        # Auth state
+        # Auth
         self._unlocked     = False
         self._unlock_name  = ""
         self._unlock_time  = 0.0
@@ -291,35 +272,34 @@ class FaceAuth:
         self._tracked_id   = -1
         self._match_buf    = deque(maxlen=config.FACE_CONFIRM_FRAMES)
 
-        # Debug metrics
+        # Debug
         self.last_se       = 999.0
         self.last_ie       = 999.0
         self.last_cand     = "—"
         self._track_status = "SCANNING"
 
-        # Enroll state
+        # Enroll
         self._enroll_name  = ""
         self._enroll_col   = []
         self._enroll_start = 0.0
         self._del_names    = []
         self._typed        = ""
 
-        # Enrollment uses IMAGE mode landmarker (separate instance)
-        self._enroll_lm    = None
-
         # Mouse
         self._mx = 0; self._my = 0; self._clicked = False
 
-        # LIVE_STREAM timestamp (must be monotonically increasing)
-        self._ts = 0
+        # LIVE_STREAM timestamp
+        # FIXED: starts at 1, increments every process_frame() call
+        # regardless of state — prevents LIVE_STREAM stall
+        self._ts = 1
 
-    # ── Mouse callback ────────────────────────────────────────────────
+    # ── Mouse ─────────────────────────────────────────────────────────
     def mouse_callback(self, event, x, y, flags, param):
         self._mx, self._my = x, y
         if event == cv2.EVENT_LBUTTONDOWN:
             self._clicked = True
 
-    # ── Public queries ────────────────────────────────────────────────
+    # ── Public ────────────────────────────────────────────────────────
     def is_unlocked(self)    -> bool:  return self._unlocked
     def unlocked_name(self)  -> str:   return self._unlock_name
     def enrolled_names(self) -> list:  return list(self._db.keys())
@@ -338,35 +318,34 @@ class FaceAuth:
 
     # ── Main per-frame entry ──────────────────────────────────────────
     def process_frame(self, frame, key):
-        # Fast path — no detection for UI-only states
+        # FIXED: always increment timestamp regardless of state
+        # This keeps LIVE_STREAM's internal clock moving forward
+        self._ts += 33
+
+        # Send frame to LIVE_STREAM on every call (non-blocking, 0.35ms)
+        # Works for both recognition AND enrollment — single landmarker
+        try:
+            rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            _landmarker.detect_async(mp_img, self._ts)
+        except Exception:
+            pass
+
+        # Read latest result
+        with _face_lock:
+            result = _latest_face_result
+
+        # Route to state
         if self._state == _ST_TYPING:
             return self._state_typing(frame, key)
         if self._state == _ST_DELETE:
             return self._state_delete(frame, key)
-
-        # ── LIVE_STREAM: send frame async (non-blocking, 0.35ms) ──────
-        if self._state == _ST_RECOGNISE:
-            try:
-                rgb      = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_img   = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                self._ts += 33   # ~30fps timestamps, must increase each call
-                _landmarker.detect_async(mp_img, self._ts)
-            except Exception:
-                pass
-
-            # Read latest result from callback (may be 1 frame behind — acceptable)
-            with _face_lock:
-                result = _latest_face_result
-
-            return self._state_recognise(frame, result, key)
-
-        # Enrolling uses synchronous IMAGE mode (accuracy over speed)
         if self._state == _ST_ENROLLING:
-            return self._state_enrolling_sync(frame, key)
+            return self._state_enrolling(frame, result, key)
 
-        return frame
+        return self._state_recognise(frame, result, key)
 
-    # ── RECOGNISE STATE ───────────────────────────────────────────────
+    # ── RECOGNISE ─────────────────────────────────────────────────────
     def _state_recognise(self, frame, result, key):
         lm  = _to_np(result)
         box = _get_box(result, frame.shape)
@@ -375,17 +354,15 @@ class FaceAuth:
             track_id, is_new = self._tracker.update(box)
             self._grace_count = 0
 
-            # Face size guard
             H  = frame.shape[0]
-            ys = [result.face_landmarks[0][i].y*H for i in range(len(result.face_landmarks[0]))]
+            ys = [result.face_landmarks[0][i].y*H
+                  for i in range(len(result.face_landmarks[0]))]
             face_ok = (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC
 
-            # Only run recognition when LOCKED
             if not self._unlocked and face_ok and lm is not None:
                 self._run_recognition(lm, frame.shape, track_id)
 
-            # Draw box
-            x1, y1, x2, y2 = box
+            x1,y1,x2,y2 = box
             if self._unlocked:
                 col = (0,220,0); thick = 3
                 lbl = self._unlock_name; lc = (0,255,0)
@@ -399,11 +376,9 @@ class FaceAuth:
             cv2.rectangle(frame,(x1,y1),(x2,y2),col,thick)
             cv2.putText(frame,lbl,(x1,max(y1-10,85)),
                         cv2.FONT_HERSHEY_SIMPLEX,0.9,lc,2)
-
             H2,W2 = frame.shape[:2]
             for pt in result.face_landmarks[0]:
                 cv2.circle(frame,(int(pt.x*W2),int(pt.y*H2)),1,col,-1)
-
         else:
             self._tracker.lost()
             self._grace_count += 1
@@ -411,18 +386,16 @@ class FaceAuth:
             if self._unlocked and self._grace_count >= GRACE_FRAMES:
                 self._force_relock("Face lost — grace period expired")
 
-        # Auth timeout
         if (self._unlocked and
                 (time.time()-self._unlock_time) > config.FACE_AUTH_TIMEOUT):
             self._force_relock("Session timeout")
 
-        # Red border when locked
         if not self._unlocked:
             cv2.rectangle(frame,(0,0),
                           (frame.shape[1]-1,frame.shape[0]-1),(0,0,200),5)
         return frame
 
-    # ── Run identity comparison ───────────────────────────────────────
+    # ── Recognition logic ─────────────────────────────────────────────
     def _run_recognition(self, lm, shape, track_id):
         try:
             yaw, pitch = _head_pose(lm, shape)
@@ -452,7 +425,7 @@ class FaceAuth:
         self._match_buf.clear()
         self._tracker.reset()
 
-    # ── STATE: TYPING ─────────────────────────────────────────────────
+    # ── TYPING ────────────────────────────────────────────────────────
     def _state_typing(self, frame, key):
         combined = _draw_keyboard(frame, self._typed)
         fh, fw   = frame.shape[:2]
@@ -462,32 +435,27 @@ class FaceAuth:
             self._clicked = False
             if done and self._typed.strip():
                 self._start_enroll(self._typed.strip())
-        if key == 27:   self._state = _ST_RECOGNISE
+        if key == 27:
+            self._state = _ST_RECOGNISE
         elif key in (13,10):
             if self._typed.strip(): self._start_enroll(self._typed.strip())
-        elif key == 8:  self._typed = self._typed[:-1]
-        elif 32 <= key <= 122: self._typed += chr(key).upper()
+        elif key == 8:
+            self._typed = self._typed[:-1]
+        elif 32 <= key <= 122:
+            self._typed += chr(key).upper()
         return combined
 
     def _start_enroll(self, name):
-        # Create a synchronous IMAGE mode landmarker for enrollment
-        opts = vision.FaceLandmarkerOptions(
-            base_options=python.BaseOptions(
-                model_asset_path=config.FACE_MODEL_PATH),
-            running_mode=vision.RunningMode.IMAGE,
-            num_faces=1,
-            min_face_detection_confidence=0.4,
-            min_face_presence_confidence=0.4,
-        )
-        self._enroll_lm    = vision.FaceLandmarker.create_from_options(opts)
+        # FIXED: no second landmarker created here
+        # Uses the global LIVE_STREAM _landmarker via process_frame()
         self._enroll_name  = name
         self._enroll_col   = []
         self._enroll_start = time.time()
         self._state        = _ST_ENROLLING
         print(f"[FACE] Enrolling: {name}")
 
-    # ── STATE: ENROLLING (sync IMAGE mode for accuracy) ───────────────
-    def _state_enrolling_sync(self, frame, key):
+    # ── ENROLLING — uses LIVE_STREAM result (no second landmarker) ────
+    def _state_enrolling(self, frame, result, key):
         name      = self._enroll_name
         collected = self._enroll_col
         TIMEOUT   = 50.0
@@ -495,13 +463,10 @@ class FaceAuth:
         is_good   = False
         status    = "No face detected"
 
-        try:
-            rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = self._enroll_lm.detect(
-                mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-            lm = _to_np(result)
+        lm = _to_np(result)
 
-            if lm is not None:
+        if lm is not None:
+            try:
                 yaw, pitch = _head_pose(lm, frame.shape)
                 if abs(yaw) < 35 and abs(pitch) < 25:
                     lm_n = _normalize(lm)
@@ -516,9 +481,10 @@ class FaceAuth:
                     H, W = frame.shape[:2]
                     for pt in result.face_landmarks[0]:
                         cv2.circle(frame,(int(pt.x*W),int(pt.y*H)),2,(0,140,255),-1)
-        except Exception as e:
-            status = "Adjust position"
+            except Exception:
+                status = "Adjust position"
 
+        # UI
         cv2.rectangle(frame,(0,0),(frame.shape[1],115),(0,55,150),-1)
         cv2.putText(frame,f"ENROLLING: {name}",
                     (20,42),cv2.FONT_HERSHEY_SIMPLEX,1.2,(255,255,255),2)
@@ -536,14 +502,12 @@ class FaceAuth:
 
         if key == 27:
             print("[FACE] Enrollment cancelled.")
-            self._enroll_lm = None
             self._state = _ST_RECOGNISE
         elif len(collected) >= config.FACE_ENROLL_TARGET or remaining <= 0:
             self._finish_enroll(collected, name, frame)
         return frame
 
     def _finish_enroll(self, collected, name, frame):
-        self._enroll_lm = None
         if len(collected) >= 10:
             avg = np.mean(collected, axis=0).astype(np.float32)
             self._db[name] = {'stable': avg, 'frames': len(collected)}
@@ -556,7 +520,7 @@ class FaceAuth:
         self._state = _ST_RECOGNISE
         self._force_relock()
 
-    # ── STATE: DELETE ─────────────────────────────────────────────────
+    # ── DELETE ────────────────────────────────────────────────────────
     def _state_delete(self, frame, key):
         panel = np.full_like(frame, 25)
         cv2.putText(panel,"DELETE WHICH FACE?",(20,55),
@@ -566,7 +530,8 @@ class FaceAuth:
         for i, nm in enumerate(self._del_names):
             cv2.putText(panel,f"  {i+1}.  {nm}",
                         (20,145+i*45),cv2.FONT_HERSHEY_SIMPLEX,1.1,(255,170,0),2)
-        if key == 27:   self._state = _ST_RECOGNISE
+        if key == 27:
+            self._state = _ST_RECOGNISE
         elif ord('1') <= key <= ord('9'):
             idx = key-ord('1')
             if idx < len(self._del_names):
@@ -610,7 +575,7 @@ class FaceAuth:
                     (20+int(bw*min(prog,1.0)),92),(0,180,255),-1)
         return frame
 
-    # ── Debug panel (top-right, compact) ─────────────────────────────
+    # ── Debug panel (top-right, no frame.copy() overhead) ─────────────
     def draw_debug(self, frame):
         H, W = frame.shape[:2]
         mc   = lambda v,t: (0,220,0) if v<t else (0,80,220)
@@ -625,10 +590,12 @@ class FaceAuth:
         ]
         pw = 234; ph = len(lines)*18+10
         x0 = W-pw-4; y0 = 78
-        overlay = frame.copy()
-        cv2.rectangle(overlay,(x0,y0),(W-2,y0+ph),(15,15,15),-1)
-        cv2.addWeighted(overlay,0.55,frame,0.45,0,frame)
+        # FIXED: direct rectangle instead of frame.copy()+addWeighted
+        # Saves ~2ms per frame, eliminates full frame copy
+        cv2.rectangle(frame,(x0,y0),(W-2,y0+ph),(15,15,15),-1)
         for i,(text,color) in enumerate(lines):
             cv2.putText(frame,text,(x0+5,y0+14+i*18),
                         cv2.FONT_HERSHEY_SIMPLEX,0.42,color,1)
         return frame
+PYEOF
+echo "face_auth done"
