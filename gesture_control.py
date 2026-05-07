@@ -1,7 +1,6 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
-Optimized - Early rejection for removed gestures
-Fixed - Pointing Down = L-shape (index down + thumb out)
+Fixed - Mirrors successful Thumb Up/Pointing Up pattern
 """
 
 import cv2
@@ -41,31 +40,29 @@ def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — Fixed Pointing Down as L-shape
+# GESTURE DETECTION — Mirrors successful Thumb Up/Pointing Up pattern
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    Pointing Down = L-shape (index finger down + thumb extended sideways)
+    Pattern learned from Thumb Up/Pointing Up success:
+    - Thumb gestures = ALL fingers curled (n==0)
+    - Pointing gestures = ONLY index finger extended
+    These conditions are mutually exclusive!
     """
     try:
         if not lm or len(lm) < 21:
             return "No hand"
 
         wrist      = lm[0]
-        thumb_tip  = lm[4];  thumb_cmc  = lm[1];  thumb_ip = lm[3]
-        index_tip  = lm[8];  index_mcp  = lm[5];  index_pip = lm[6]
+        thumb_tip  = lm[4];  thumb_cmc  = lm[1]
+        index_tip  = lm[8];  index_mcp  = lm[5]
         middle_tip = lm[12]; middle_mcp = lm[9]
         ring_tip   = lm[16]; ring_mcp   = lm[13]
         pinky_tip  = lm[20]; pinky_mcp  = lm[17]
 
         def ext(tip, mcp, thr=0.07):
             return tip.y < mcp.y - thr
-        
-        def is_thumb_extended_sideways(thumb_tip, thumb_cmc, wrist):
-            """Check if thumb is extended to the side (not up/down)"""
-            thumb_angle_x = thumb_tip.x - thumb_cmc.x
-            return abs(thumb_angle_x) > 0.08  # Thumb pointing left/right
 
         ie = ext(index_tip,  index_mcp)
         me = ext(middle_tip, middle_mcp)
@@ -75,34 +72,34 @@ def detect_gesture(lm):
 
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
-        thumb_sideways = abs(thumb_tip.x - thumb_cmc.x) > 0.08
 
         # =============================================================
-        # POINTING DOWN - L-shape (index pointing down + thumb out)
+        # THUMB GESTURES: ALL fingers must be curled (n == 0)
+        # This makes a fist with thumb sticking out
+        # Mirrors successful Thumb Up pattern
         # =============================================================
-        # Index finger extended downward, thumb out to side, other fingers curled
-        if ie and not me and not re and not pe and thumb_sideways:
-            # Check if index is pointing DOWN (tip below MCP)
-            v = index_tip.y - index_mcp.y
-            if v > -0.02:  # Index pointing down or horizontal
-                return "Pointing Down"
-        
+        if n == 0 and tp > 0.18:  # Fist with visible thumb
+            if tv < -0.10:         # Thumb pointing UP
+                return "Thumb Up"
+            if tv > 0.10:          # Thumb pointing DOWN
+                return "Thumb Down"
+
         # =============================================================
-        # POINTING UP - Index finger up only (no thumb needed)
+        # POINTING GESTURES: ONLY index finger extended
+        # All other fingers MUST be curled
+        # Mirrors successful Pointing Up pattern
         # =============================================================
         if ie and not me and not re and not pe:
-            v = index_tip.y - index_mcp.y
-            if v < -0.12:  # Index pointing up
-                return "Pointing Up"
-
-        # =============================================================
-        # THUMB UP / DOWN (fist with thumb)
-        # =============================================================
-        if n == 0 and tp > 0.18:
-            if tv < -0.10:
-                return "Thumb Up"
-            if tv > 0.10:
-                return "Thumb Down"
+            il = _dist(index_tip, index_mcp)
+            ml = _dist(middle_tip, middle_mcp)
+            rl = _dist(ring_tip,   ring_mcp)
+            # Make sure index is significantly more extended than others
+            if il > ml + 0.03 and il > rl + 0.03:
+                v = index_tip.y - index_mcp.y
+                if v > -0.05:       # Index pointing DOWN (tip at or below MCP)
+                    return "Pointing Down"
+                if v < -0.12:       # Index pointing UP (tip well above MCP)
+                    return "Pointing Up"
 
         # =============================================================
         # PEACE SIGN
@@ -119,7 +116,7 @@ def detect_gesture(lm):
             return "Open Palm"
 
         # =============================================================
-        # FIST
+        # FIST (no thumb visible)
         # =============================================================
         if n == 0 and tp < 0.22:
             return "Fist"
