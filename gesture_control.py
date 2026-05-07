@@ -80,7 +80,7 @@ def detect_gesture(lm):
         if n == 0 and tp > 0.18:  # Fist with visible thumb
             if tv < -0.10:         # Thumb pointing UP
                 return "Thumb Up"
-            if tv > 0.05:          # Thumb pointing DOWN (REDUCED from 0.10 to 0.05)
+            if tv > 0.03:          # Thumb pointing DOWN (REDUCED from 0.10 to 0.05)
                 return "Thumb Down"
 
         # =============================================================
