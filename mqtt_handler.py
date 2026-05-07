@@ -1,11 +1,3 @@
-"""
-mqtt_handler.py — MQTT publisher with Shiftr.io support
-========================================================
-Supports both:
-  - Local Mosquitto: set MQTT_USER = "" in config.py
-  - Shiftr.io cloud: set MQTT_USER + MQTT_PASSWORD in config.py
-Auto-reconnects if broker goes offline.
-"""
 
 import paho.mqtt.client as mqtt
 import time
@@ -22,7 +14,6 @@ class MQTTHandler:
         self._client.on_connect    = self._on_connect
         self._client.on_disconnect = self._on_disconnect
 
-        # Set credentials if configured (required for Shiftr.io)
         user = getattr(config, 'MQTT_USER',     '')
         pwd  = getattr(config, 'MQTT_PASSWORD', '')
         if user:
@@ -31,7 +22,6 @@ class MQTTHandler:
         else:
             print("[MQTT] No credentials — local broker mode")
 
-        # Set reconnect delay ONCE at init (not inside loop)
         self._client.reconnect_delay_set(min_delay=1, max_delay=10)
 
         t = threading.Thread(target=self._connect_loop, daemon=True)
@@ -67,7 +57,7 @@ class MQTTHandler:
             try:
                 self._client.connect(config.MQTT_BROKER,
                                      config.MQTT_PORT, 60)
-                time.sleep(1.5)   # wait for on_connect callback
+                time.sleep(1.5) 
             except Exception as e:
                 print(f"[MQTT] Cannot reach broker: {e} "
                       f"— retry in {config.MQTT_RECONNECT_DELAY}s")
