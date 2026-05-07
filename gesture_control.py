@@ -1,6 +1,6 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
-Fixed - Pointing Down = L-shape (index down + thumb sideways)
+Fixed - Reduced pointing down threshold for easier detection
 """
 
 import cv2
@@ -40,22 +40,21 @@ def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — Pointing Down = L-shape (index down + thumb sideways)
+# GESTURE DETECTION — Reduced threshold for pointing down
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    Pointing Down = L-shape: index finger down + thumb extended sideways
-    Pointing Up = index finger up only (simple)
-    Thumb Down = fist with thumb pointing down
+    Pointing Down: requires less extension (shorter finger)
+    Pointing Up: requires more extension (longer finger)
     """
     try:
         if not lm or len(lm) < 21:
             return "No hand"
 
         wrist      = lm[0]
-        thumb_tip  = lm[4];  thumb_cmc  = lm[1];  thumb_ip = lm[3]
-        index_tip  = lm[8];  index_mcp  = lm[5];  index_pip = lm[6]
+        thumb_tip  = lm[4];  thumb_cmc  = lm[1]
+        index_tip  = lm[8];  index_mcp  = lm[5]
         middle_tip = lm[12]; middle_mcp = lm[9]
         ring_tip   = lm[16]; ring_mcp   = lm[13]
         pinky_tip  = lm[20]; pinky_mcp  = lm[17]
@@ -74,46 +73,47 @@ def detect_gesture(lm):
         
         # Check if thumb is extended sideways (left or right)
         thumb_sideways = abs(thumb_tip.x - thumb_cmc.x) > 0.08
-        # Check if thumb is pointing up/down (not sideways)
-        thumb_vertical = abs(tv) > 0.08
 
         # =============================================================
-        # PRIORITY 1: POINTING DOWN - L-SHAPE (index down + thumb sideways)
-        # This is the distinctive L gesture
+        # POINTING DOWN - L-SHAPE (requires LESS extension)
+        # Reduced threshold from -0.05 to 0.02 (easier to trigger)
         # =============================================================
         if ie and not me and not re and not pe and thumb_sideways:
             v = index_tip.y - index_mcp.y
-            if v > -0.05:  # Index pointing DOWN
+            # Pointing down: tip at or BELOW MCP (positive value)
+            # Reduced threshold - now triggers with just slight downward angle
+            if v > 0.02:   # Was -0.05, now easier to detect
                 return "Pointing Down"
 
         # =============================================================
-        # PRIORITY 2: POINTING UP (index up, thumb optional)
+        # POINTING UP (requires MORE extension)
+        # Keeps original strict threshold
         # =============================================================
         if ie and not me and not re and not pe:
             v = index_tip.y - index_mcp.y
-            if v < -0.12:  # Index pointing UP
+            # Pointing up: tip well ABOVE MCP (negative value)
+            if v < -0.12:  # Stays strict
                 return "Pointing Up"
 
         # =============================================================
-        # PRIORITY 3: PEACE SIGN
+        # THUMB GESTURES (fist with thumb vertical)
+        # =============================================================
+        fingers_curled = (not ie and not me and not re and not pe)
+        
+        if fingers_curled and tp > 0.18:
+            if tv < -0.10:
+                return "Thumb Up"
+            if tv > 0.05:
+                return "Thumb Down"
+
+        # =============================================================
+        # PEACE SIGN
         # =============================================================
         if ie and me and not re and not pe:      
             return "Peace Sign"
 
         # =============================================================
-        # PRIORITY 4: THUMB GESTURES (fist with thumb vertical)
-        # All fingers must be curled
-        # =============================================================
-        fingers_curled = (not ie and not me and not re and not pe)
-        
-        if fingers_curled and tp > 0.18:  # Fist with visible thumb
-            if tv < -0.10:                # Thumb pointing UP
-                return "Thumb Up"
-            if tv > 0.05 and thumb_vertical:  # Thumb pointing DOWN (vertical)
-                return "Thumb Down"
-
-        # =============================================================
-        # PRIORITY 5: OPEN PALM (UNIFIED)
+        # OPEN PALM (UNIFIED)
         # =============================================================
         if n >= 3 and tp > 0.25:
             return "Open Palm"
@@ -121,7 +121,7 @@ def detect_gesture(lm):
             return "Open Palm"
 
         # =============================================================
-        # PRIORITY 6: FIST (no thumb visible)
+        # FIST
         # =============================================================
         if fingers_curled and tp < 0.22:
             return "Fist"
