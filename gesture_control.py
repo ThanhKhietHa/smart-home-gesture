@@ -1,6 +1,7 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
 Optimized - Early rejection for removed gestures
+Fixed - Priority-based detection prevents Thumb Down/Pointing Down conflict
 """
 
 import cv2
@@ -40,12 +41,13 @@ def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — Optimized with early returns
+# GESTURE DETECTION — Priority-based to avoid conflicts
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    Optimized to quickly return for removed gestures.
+    Priority order: Pointing > Peace Sign > Thumb > Open Palm > Fist
+    This prevents Thumb Down/Pointing Down conflicts.
     """
     try:
         if not lm or len(lm) < 21:
@@ -70,41 +72,56 @@ def detect_gesture(lm):
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
 
-        # ── Thumb Up / Down (KEPT) ─────────────────────────────────────
-        if n == 0 and tp > 0.18:
-            if tv < -0.10: return "Thumb Up"
-            if tv >  0.10: return "Thumb Down"
-
-        # ── Open Palm / Spread (UNIFIED - both return Open Palm) ───────
-        # If all fingers extended and thumb extended, it's Open Palm
-        if n >= 3 and tp > 0.25: return "Open Palm"      # Spread gesture
-        if n >= 3:               return "Open Palm"      # Open Palm gesture
-        if n == 0 and tp < 0.22: return "Fist"           # KEPT
-
-        # ── REMOVED GESTURES (quick return to save CPU) ─────────────────
-        # These gestures are no longer in config, so we return early
-        if ie and me and re and not pe:          
-            return "Three Fingers"   # REMOVED - will be ignored
-            
-        if n == 4 and tp < 0.20:                 
-            return "Four Fingers"    # REMOVED - will be ignored
-            
-        if _dist(thumb_tip, index_tip) < 0.06 and not me and not re:
-            return "Pinch"           # REMOVED - will be ignored
-
-        # ── Peace Sign (KEPT) ──────────────────────────────────────────
-        if ie and me and not re and not pe:      
-            return "Peace Sign"      # KEPT
-
-        # ── Pointing (KEPT) ────────────────────────────────────────────
+        # =============================================================
+        # PRIORITY 1: POINTING GESTURES (most specific)
+        # Only index finger extended, all others curled
+        # =============================================================
         if ie and not me and not re and not pe:
             il = _dist(index_tip, index_mcp)
             ml = _dist(middle_tip, middle_mcp)
             rl = _dist(ring_tip,   ring_mcp)
             if il > ml + 0.03 and il > rl + 0.03:
                 v = index_tip.y - index_mcp.y
-                if v >  -0.05: return "Pointing Down"  # KEPT
-                if v <  -0.12: return "Pointing Up"    # KEPT
+                if v > -0.05:      # Tip below or near MCP
+                    return "Pointing Down"
+                if v < -0.12:      # Tip well above MCP
+                    return "Pointing Up"
+
+        # =============================================================
+        # PRIORITY 2: PEACE SIGN (two fingers)
+        # =============================================================
+        if ie and me and not re and not pe:      
+            return "Peace Sign"
+
+        # =============================================================
+        # PRIORITY 3: THUMB GESTURES (fist with thumb out)
+        # All fingers must be curled (n == 0)
+        # =============================================================
+        if n == 0 and tp > 0.18:      # All fingers curled = fist
+            if tv < -0.10:             # Thumb pointing up
+                return "Thumb Up"
+            if tv > 0.10:              # Thumb pointing down
+                return "Thumb Down"
+
+        # =============================================================
+        # PRIORITY 4: OPEN PALM (many fingers extended)
+        # =============================================================
+        if n >= 3 and tp > 0.25:       # Spread fingers with thumb out
+            return "Open Palm"
+        if n >= 3:                     # Open palm with thumb tucked
+            return "Open Palm"
+
+        # =============================================================
+        # PRIORITY 5: FIST (no fingers extended)
+        # =============================================================
+        if n == 0 and tp < 0.22:
+            return "Fist"
+
+        # =============================================================
+        # REMOVED GESTURES (kept for reference but return Unknown)
+        # =============================================================
+        # Three Fingers, Four Fingers, Pinch are no longer in config
+        # They return Unknown to save processing
 
         return "Unknown"
 
