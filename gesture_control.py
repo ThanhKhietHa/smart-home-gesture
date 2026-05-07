@@ -1,6 +1,6 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
-Fixed - Mirrors successful Thumb Up/Pointing Up pattern
+Fixed - Reduced thumb down threshold for easier detection
 """
 
 import cv2
@@ -76,18 +76,16 @@ def detect_gesture(lm):
         # =============================================================
         # THUMB GESTURES: ALL fingers must be curled (n == 0)
         # This makes a fist with thumb sticking out
-        # Mirrors successful Thumb Up pattern
         # =============================================================
         if n == 0 and tp > 0.18:  # Fist with visible thumb
             if tv < -0.10:         # Thumb pointing UP
                 return "Thumb Up"
-            if tv > 0.10:          # Thumb pointing DOWN
+            if tv > 0.05:          # Thumb pointing DOWN (REDUCED from 0.10 to 0.05)
                 return "Thumb Down"
 
         # =============================================================
         # POINTING GESTURES: ONLY index finger extended
         # All other fingers MUST be curled
-        # Mirrors successful Pointing Up pattern
         # =============================================================
         if ie and not me and not re and not pe:
             il = _dist(index_tip, index_mcp)
