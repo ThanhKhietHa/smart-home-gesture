@@ -1,6 +1,6 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
-Fixed - Reduced thumb down threshold for easier detection
+Fixed - Strict mutual exclusion between Thumb Down and Pointing Down
 """
 
 import cv2
@@ -40,15 +40,15 @@ def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — Mirrors successful Thumb Up/Pointing Up pattern
+# GESTURE DETECTION — Strict mutual exclusion
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    Pattern learned from Thumb Up/Pointing Up success:
-    - Thumb gestures = ALL fingers curled (n==0)
-    - Pointing gestures = ONLY index finger extended
-    These conditions are mutually exclusive!
+    Uses strict mutual exclusion:
+    - Pointing: ONLY index finger extended (others MUST be curled)
+    - Thumb: ALL fingers curled (fist with thumb)
+    These can NEVER both be true.
     """
     try:
         if not lm or len(lm) < 21:
@@ -63,60 +63,70 @@ def detect_gesture(lm):
 
         def ext(tip, mcp, thr=0.07):
             return tip.y < mcp.y - thr
+        
+        def is_curled(tip, mcp, thr=0.02):
+            """Check if finger is curled (tip at or below MCP)"""
+            return tip.y >= mcp.y - thr
 
         ie = ext(index_tip,  index_mcp)
         me = ext(middle_tip, middle_mcp)
         re = ext(ring_tip,   ring_mcp)
         pe = ext(pinky_tip,  pinky_mcp)
-        n  = sum([ie, me, re, pe])
+        
+        # Check curled fingers (for pointing, others MUST be curled)
+        middle_curled = is_curled(middle_tip, middle_mcp)
+        ring_curled = is_curled(ring_tip, ring_mcp)
+        pinky_curled = is_curled(pinky_tip, pinky_mcp)
+        
+        n_extended = sum([ie, me, re, pe])
 
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
 
         # =============================================================
-        # THUMB GESTURES: ALL fingers must be curled (n == 0)
-        # This makes a fist with thumb sticking out
+        # PRIORITY 1: POINTING GESTURES (MOST SPECIFIC)
+        # ONLY index extended, ALL other fingers MUST be curled
         # =============================================================
-        if n == 0 and tp > 0.18:  # Fist with visible thumb
-            if tv < -0.10:         # Thumb pointing UP
-                return "Thumb Up"
-            if tv > 0.03:          # Thumb pointing DOWN (REDUCED from 0.10 to 0.05)
-                return "Thumb Down"
-
-        # =============================================================
-        # POINTING GESTURES: ONLY index finger extended
-        # All other fingers MUST be curled
-        # =============================================================
-        if ie and not me and not re and not pe:
+        if ie and middle_curled and ring_curled and pinky_curled:
+            # Check if index is significantly extended
             il = _dist(index_tip, index_mcp)
             ml = _dist(middle_tip, middle_mcp)
-            rl = _dist(ring_tip,   ring_mcp)
-            # Make sure index is significantly more extended than others
-            if il > ml + 0.03 and il > rl + 0.03:
+            if il > ml + 0.03:
                 v = index_tip.y - index_mcp.y
-                if v > -0.05:       # Index pointing DOWN (tip at or below MCP)
+                if v > -0.05:       # Pointing DOWN
                     return "Pointing Down"
-                if v < -0.12:       # Index pointing UP (tip well above MCP)
+                if v < -0.12:       # Pointing UP
                     return "Pointing Up"
 
         # =============================================================
-        # PEACE SIGN
+        # PRIORITY 2: THUMB GESTURES
+        # ALL fingers MUST be curled (n_extended == 0)
+        # This is a FIST with thumb out
         # =============================================================
-        if ie and me and not re and not pe:      
+        if n_extended == 0 and tp > 0.18:  # All fingers curled = fist
+            if tv < -0.10:                  # Thumb UP
+                return "Thumb Up"
+            if tv > 0.05:                   # Thumb DOWN
+                return "Thumb Down"
+
+        # =============================================================
+        # PEACE SIGN (index and middle extended, others curled)
+        # =============================================================
+        if ie and me and ring_curled and pinky_curled:      
             return "Peace Sign"
 
         # =============================================================
-        # OPEN PALM (UNIFIED)
+        # OPEN PALM (many fingers extended)
         # =============================================================
-        if n >= 3 and tp > 0.25:
+        if n_extended >= 3 and tp > 0.25:
             return "Open Palm"
-        if n >= 3:
+        if n_extended >= 3:
             return "Open Palm"
 
         # =============================================================
         # FIST (no thumb visible)
         # =============================================================
-        if n == 0 and tp < 0.22:
+        if n_extended == 0 and tp < 0.22:
             return "Fist"
 
         return "Unknown"
