@@ -75,20 +75,15 @@ CONFIRM_ENTRY_DELAY  = 0.6
 # DEVICE → GESTURE MAPPING (Updated - Removed fan/curtains gestures)
 # =====================================================================
 GESTURE_COMMANDS = {
-    "Open Palm":     ("lights",   "on"),
-    "Fist":          ("lights",   "off"),
+    "Open Palm":     ("lights",   "toggle"),
     "Peace Sign":    ("door",     "toggle"),
-    "Pointing Up":   ("ac",       "off"),
-    "Pointing Down": ("ac",       "on"),
-    "Thumb Up":      ("window",   "roll_up"),
-    "Thumb Down":    ("window",   "roll_down"),
+    "Pointing Up":   ("ac",       "toggle"),
+    "Thumb Up":      ("window",   "toggle"),
 }
 
 DEVICE_INITIAL_STATES = {
     "lights":   0,
-    "fan":      0,      # Kept for compatibility (won't be used)
     "door":     0,
     "ac":       0,
-    "curtains": "stopped",  # Kept for compatibility
-    "window":   "stopped",
+    "window":   0,
 }
