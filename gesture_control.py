@@ -1,7 +1,7 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
 Optimized - Early rejection for removed gestures
-Fixed - Priority-based detection prevents Thumb Down/Pointing Down conflict
+Fixed - Pointing Down = L-shape (index down + thumb out)
 """
 
 import cv2
@@ -41,27 +41,31 @@ def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — Priority-based to avoid conflicts
+# GESTURE DETECTION — Fixed Pointing Down as L-shape
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    Priority order: Pointing > Peace Sign > Thumb > Open Palm > Fist
-    This prevents Thumb Down/Pointing Down conflicts.
+    Pointing Down = L-shape (index finger down + thumb extended sideways)
     """
     try:
         if not lm or len(lm) < 21:
             return "No hand"
 
         wrist      = lm[0]
-        thumb_tip  = lm[4];  thumb_cmc  = lm[1]
-        index_tip  = lm[8];  index_mcp  = lm[5]
+        thumb_tip  = lm[4];  thumb_cmc  = lm[1];  thumb_ip = lm[3]
+        index_tip  = lm[8];  index_mcp  = lm[5];  index_pip = lm[6]
         middle_tip = lm[12]; middle_mcp = lm[9]
         ring_tip   = lm[16]; ring_mcp   = lm[13]
         pinky_tip  = lm[20]; pinky_mcp  = lm[17]
 
         def ext(tip, mcp, thr=0.07):
             return tip.y < mcp.y - thr
+        
+        def is_thumb_extended_sideways(thumb_tip, thumb_cmc, wrist):
+            """Check if thumb is extended to the side (not up/down)"""
+            thumb_angle_x = thumb_tip.x - thumb_cmc.x
+            return abs(thumb_angle_x) > 0.08  # Thumb pointing left/right
 
         ie = ext(index_tip,  index_mcp)
         me = ext(middle_tip, middle_mcp)
@@ -71,57 +75,54 @@ def detect_gesture(lm):
 
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
+        thumb_sideways = abs(thumb_tip.x - thumb_cmc.x) > 0.08
 
         # =============================================================
-        # PRIORITY 1: POINTING GESTURES (most specific)
-        # Only index finger extended, all others curled
+        # POINTING DOWN - L-shape (index pointing down + thumb out)
+        # =============================================================
+        # Index finger extended downward, thumb out to side, other fingers curled
+        if ie and not me and not re and not pe and thumb_sideways:
+            # Check if index is pointing DOWN (tip below MCP)
+            v = index_tip.y - index_mcp.y
+            if v > -0.02:  # Index pointing down or horizontal
+                return "Pointing Down"
+        
+        # =============================================================
+        # POINTING UP - Index finger up only (no thumb needed)
         # =============================================================
         if ie and not me and not re and not pe:
-            il = _dist(index_tip, index_mcp)
-            ml = _dist(middle_tip, middle_mcp)
-            rl = _dist(ring_tip,   ring_mcp)
-            if il > ml + 0.03 and il > rl + 0.03:
-                v = index_tip.y - index_mcp.y
-                if v > -0.05:      # Tip below or near MCP
-                    return "Pointing Down"
-                if v < -0.12:      # Tip well above MCP
-                    return "Pointing Up"
+            v = index_tip.y - index_mcp.y
+            if v < -0.12:  # Index pointing up
+                return "Pointing Up"
 
         # =============================================================
-        # PRIORITY 2: PEACE SIGN (two fingers)
+        # THUMB UP / DOWN (fist with thumb)
+        # =============================================================
+        if n == 0 and tp > 0.18:
+            if tv < -0.10:
+                return "Thumb Up"
+            if tv > 0.10:
+                return "Thumb Down"
+
+        # =============================================================
+        # PEACE SIGN
         # =============================================================
         if ie and me and not re and not pe:      
             return "Peace Sign"
 
         # =============================================================
-        # PRIORITY 3: THUMB GESTURES (fist with thumb out)
-        # All fingers must be curled (n == 0)
+        # OPEN PALM (UNIFIED)
         # =============================================================
-        if n == 0 and tp > 0.18:      # All fingers curled = fist
-            if tv < -0.10:             # Thumb pointing up
-                return "Thumb Up"
-            if tv > 0.10:              # Thumb pointing down
-                return "Thumb Down"
-
-        # =============================================================
-        # PRIORITY 4: OPEN PALM (many fingers extended)
-        # =============================================================
-        if n >= 3 and tp > 0.25:       # Spread fingers with thumb out
+        if n >= 3 and tp > 0.25:
             return "Open Palm"
-        if n >= 3:                     # Open palm with thumb tucked
+        if n >= 3:
             return "Open Palm"
 
         # =============================================================
-        # PRIORITY 5: FIST (no fingers extended)
+        # FIST
         # =============================================================
         if n == 0 and tp < 0.22:
             return "Fist"
-
-        # =============================================================
-        # REMOVED GESTURES (kept for reference but return Unknown)
-        # =============================================================
-        # Three Fingers, Four Fingers, Pinch are no longer in config
-        # They return Unknown to save processing
 
         return "Unknown"
 
