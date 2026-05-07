@@ -75,10 +75,11 @@ def detect_gesture(lm):
             if tv < -0.10: return "Thumb Up"
             if tv >  0.10: return "Thumb Down"
 
-        # ── Open Palm / Fist (KEPT) ────────────────────────────────────
-        if n >= 3 and tp > 0.25: return "Spread"      # REMOVED - will be ignored
-        if n >= 3:               return "Open Palm"   # KEPT
-        if n == 0 and tp < 0.22: return "Fist"        # KEPT
+        # ── Open Palm / Spread (UNIFIED - both return Open Palm) ───────
+        # If all fingers extended and thumb extended, it's Open Palm
+        if n >= 3 and tp > 0.25: return "Open Palm"      # Spread gesture
+        if n >= 3:               return "Open Palm"      # Open Palm gesture
+        if n == 0 and tp < 0.22: return "Fist"           # KEPT
 
         # ── REMOVED GESTURES (quick return to save CPU) ─────────────────
         # These gestures are no longer in config, so we return early
