@@ -1,6 +1,6 @@
 """
 gesture_control.py — Hand Gesture Recognition & Device Control
-Fixed - Pointing gestures checked BEFORE thumb gestures to prevent conflict
+Fixed - Pointing Down = L-shape (index down + thumb sideways)
 """
 
 import cv2
@@ -40,21 +40,22 @@ def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
 # =====================================================================
-# GESTURE DETECTION — Pointing checked FIRST (more specific)
+# GESTURE DETECTION — Pointing Down = L-shape (index down + thumb sideways)
 # =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
-    Priority: Pointing > Peace > Thumb > Open Palm > Fist
-    Pointing must be checked BEFORE thumb to prevent conflicts
+    Pointing Down = L-shape: index finger down + thumb extended sideways
+    Pointing Up = index finger up only (simple)
+    Thumb Down = fist with thumb pointing down
     """
     try:
         if not lm or len(lm) < 21:
             return "No hand"
 
         wrist      = lm[0]
-        thumb_tip  = lm[4];  thumb_cmc  = lm[1]
-        index_tip  = lm[8];  index_mcp  = lm[5]
+        thumb_tip  = lm[4];  thumb_cmc  = lm[1];  thumb_ip = lm[3]
+        index_tip  = lm[8];  index_mcp  = lm[5];  index_pip = lm[6]
         middle_tip = lm[12]; middle_mcp = lm[9]
         ring_tip   = lm[16]; ring_mcp   = lm[13]
         pinky_tip  = lm[20]; pinky_mcp  = lm[17]
@@ -70,45 +71,49 @@ def detect_gesture(lm):
 
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
+        
+        # Check if thumb is extended sideways (left or right)
+        thumb_sideways = abs(thumb_tip.x - thumb_cmc.x) > 0.08
+        # Check if thumb is pointing up/down (not sideways)
+        thumb_vertical = abs(tv) > 0.08
 
         # =============================================================
-        # PRIORITY 1: POINTING GESTURES (MOST SPECIFIC)
-        # Only index finger extended, all others curled
-        # Check this FIRST before thumb gestures
+        # PRIORITY 1: POINTING DOWN - L-SHAPE (index down + thumb sideways)
+        # This is the distinctive L gesture
+        # =============================================================
+        if ie and not me and not re and not pe and thumb_sideways:
+            v = index_tip.y - index_mcp.y
+            if v > -0.05:  # Index pointing DOWN
+                return "Pointing Down"
+
+        # =============================================================
+        # PRIORITY 2: POINTING UP (index up, thumb optional)
         # =============================================================
         if ie and not me and not re and not pe:
-            il = _dist(index_tip, index_mcp)
-            ml = _dist(middle_tip, middle_mcp)
-            rl = _dist(ring_tip,   ring_mcp)
-            # Make sure index is significantly more extended than others
-            if il > ml + 0.03 and il > rl + 0.03:
-                v = index_tip.y - index_mcp.y
-                if v > -0.05:       # Index pointing DOWN (tip at or below MCP)
-                    return "Pointing Down"
-                if v < -0.12:       # Index pointing UP (tip well above MCP)
-                    return "Pointing Up"
+            v = index_tip.y - index_mcp.y
+            if v < -0.12:  # Index pointing UP
+                return "Pointing Up"
 
         # =============================================================
-        # PRIORITY 2: PEACE SIGN
+        # PRIORITY 3: PEACE SIGN
         # =============================================================
         if ie and me and not re and not pe:      
             return "Peace Sign"
 
         # =============================================================
-        # PRIORITY 3: THUMB GESTURES (requires ALL fingers curled)
-        # ONLY after confirming it's not pointing
+        # PRIORITY 4: THUMB GESTURES (fist with thumb vertical)
+        # All fingers must be curled
         # =============================================================
-        # Check if ALL fingers are curled (fist)
         fingers_curled = (not ie and not me and not re and not pe)
         
         if fingers_curled and tp > 0.18:  # Fist with visible thumb
             if tv < -0.10:                # Thumb pointing UP
                 return "Thumb Up"
-            if tv > 0.05:                 # Thumb pointing DOWN
+            if tv > 0.05 and thumb_vertical:  # Thumb pointing DOWN (vertical)
                 return "Thumb Down"
 
         # =============================================================
-        # PRIORITY 4: OPEN PALM (UNIFIED)
+        # PRIORITY 5: OPEN PALM (UNIFIED)
         # =============================================================
         if n >= 3 and tp > 0.25:
             return "Open Palm"
@@ -116,7 +121,7 @@ def detect_gesture(lm):
             return "Open Palm"
 
         # =============================================================
-        # PRIORITY 5: FIST (no thumb visible)
+        # PRIORITY 6: FIST (no thumb visible)
         # =============================================================
         if fingers_curled and tp < 0.22:
             return "Fist"
