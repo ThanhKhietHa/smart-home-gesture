@@ -1,7 +1,3 @@
-"""
-face_auth.py — Face Recognition + Centroid Tracker (Sticky ID)
-Fixed: Added lightweight presence check for unlocked state
-"""
 
 import cv2
 import mediapipe as mp
@@ -15,15 +11,9 @@ from collections import deque
 
 import config
 
-# =====================================================================
-# TUNABLE TRACKER CONSTANTS
-# =====================================================================
 GRACE_FRAMES    = 2
 IOU_THRESHOLD   = 0.30
 
-# =====================================================================
-# MEDIAPIPE - OPTIMIZED
-# =====================================================================
 _face_options = vision.FaceLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
@@ -34,9 +24,7 @@ _face_options = vision.FaceLandmarkerOptions(
 )
 _landmarker = vision.FaceLandmarker.create_from_options(_face_options)
 
-# =====================================================================
-# LANDMARK CONSTANTS
-# =====================================================================
+
 _NOSE        = 4
 _LEFT_EYE    = 33
 _RIGHT_EYE   = 263
@@ -47,17 +35,11 @@ _CHIN        = 152
 _STABLE = [4,6,8,9,10, 33,133,159,145,263, 234,454,
            152,13, 61,291, 70,300, 168,197]
 
-# =====================================================================
-# APP STATES
-# =====================================================================
 _ST_RECOGNISE = "RECOGNISE"
 _ST_TYPING    = "TYPING"
 _ST_ENROLLING = "ENROLLING"
 _ST_DELETE    = "DELETE"
 
-# =====================================================================
-# CENTROID TRACKER
-# =====================================================================
 class _CentroidTracker:
     __slots__ = ('_box', '_centroid', '_id', '_age')
     
@@ -120,9 +102,6 @@ class _CentroidTracker:
     def box(self):
         return self._box
 
-# =====================================================================
-# LANDMARK HELPERS
-# =====================================================================
 def _to_np(result):
     if not result.face_landmarks:
         return None
@@ -167,9 +146,6 @@ def _cosine_err(a, b):
     af, bf = a.flatten(), b.flatten()
     return float(1.0 - np.dot(af,bf)/(np.linalg.norm(af)*np.linalg.norm(bf)+1e-6))
 
-# =====================================================================
-# DATABASE
-# =====================================================================
 def _load_db():
     if not os.path.exists(config.ENROLLED_FILE):
         return {}
@@ -204,9 +180,6 @@ def _identify(lm_n, db):
         best_n = 'Unknown'
     return best_n, best_se, best_ie, match
 
-# =====================================================================
-# KEYBOARD UI
-# =====================================================================
 _KB_ROWS = [
     list("QWERTYUIOP"),
     list("ASDFGHJKL"),
@@ -262,9 +235,6 @@ def _kb_hittest(fh, fw, mx, my, typed):
                 else:            return typed+ch,   False,          False
     return typed, False, False
 
-# =====================================================================
-# FACEAUTH CLASS
-# =====================================================================
 class FaceAuth:
     __slots__ = ('_db', '_state', '_unlocked', '_unlock_name', '_unlock_time',
                  '_tracker', '_grace_count', '_tracked_id', '_match_buf',
@@ -358,9 +328,6 @@ class FaceAuth:
         
         return frame
 
-    # =================================================================
-    # Full processing (recognition + drawing) - runs rarely
-    # =================================================================
     def process_frame(self, frame, key):
         if self._state == _ST_TYPING:
             return self._state_typing(frame, key)
@@ -417,8 +384,6 @@ class FaceAuth:
                 cv2.putText(frame, name_label, (x1, max(y1-10, 85)),
                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 100, 255), 2)
         else:
-            # When unlocked: use lightweight presence check only
-            # Recognition skipped entirely
             return self.check_presence(frame, box)
 
         # Auth timeout check
