@@ -95,14 +95,13 @@ def detect_gesture(lm):
         if ie and me and not re and not pe:      
             return "Peace Sign"      # KEPT
 
-        # ── Pointing (KEPT) ────────────────────────────────────────────
+        # ── Pointing (KEPT: Pointing Up only) ──────────────────────────
         if ie and not me and not re and not pe:
             il = _dist(index_tip, index_mcp)
             ml = _dist(middle_tip, middle_mcp)
             rl = _dist(ring_tip,   ring_mcp)
             if il > ml + 0.03 and il > rl + 0.03:
                 v = index_tip.y - index_mcp.y
-                if v >  -0.05: return "Pointing Down"  # KEPT
                 if v <  -0.12: return "Pointing Up"    # KEPT
 
         return "Unknown"
@@ -121,9 +120,10 @@ class GestureControl:
         self._hold_start   = 0.0
         self._cur_gesture  = None
         self._conf_gesture = None
-        self._conf_start   = 0.0
-        self._conf_entry   = 0.0
-        self._buf          = deque(maxlen=6)
+        self._conf_start    = 0.0
+        self._conf_entry    = 0.0
+        self._no_hand_start = 0.0
+        self._buf           = deque(maxlen=6)
         self.device_states = dict(config.DEVICE_INITIAL_STATES)
         
         # OPTIMIZATION: Pre-filter valid gestures for faster checking
@@ -249,10 +249,10 @@ class GestureControl:
                       (frame.shape[1]-1, frame.shape[0]-1), (0,200,255), 5)
         cv2.putText(frame, "CONFIRM ACTION?",
                     (20,155), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,255,255), 2)
-        cv2.putText(frame, f"{self._cur_gesture}  ->  {dev} {act}",
+        cv2.putText(frame, f"{self._cur_gesture}  ->  {dev}",
                     (20,192), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,0), 2)
-        cv2.putText(frame, "Thumb UP = YES     Thumb DOWN = NO",
-                    (20,226), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (200,200,200), 1)
+        cv2.putText(frame, "Thumb UP = ON    Thumb DOWN = OFF    No hand = cancel",
+                    (20,226), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200,200,200), 1)
 
         since = time.time() - self._conf_entry
         if since < config.CONFIRM_ENTRY_DELAY:
@@ -261,8 +261,33 @@ class GestureControl:
                         (20,260), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (160,160,160), 1)
             self._conf_gesture = None
             self._conf_start   = 0.0
+            self._no_hand_start = 0.0
             return None
 
+        NO_HAND_TIMEOUT = 3.0
+
+        # ── No-hand timeout → cancel ───────────────────────────────────
+        if detected in ("No hand", "Unknown"):
+            if self._no_hand_start == 0.0:
+                self._no_hand_start = time.time()
+            no_hand_elapsed = time.time() - self._no_hand_start
+            remaining_nh = max(0.0, NO_HAND_TIMEOUT - no_hand_elapsed)
+            cv2.putText(frame, f"No gesture — cancelling in {remaining_nh:.1f}s",
+                        (20,260), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (100,100,255), 2)
+            cv2.rectangle(frame, (20,272), (340,288), (60,60,60), -1)
+            cv2.rectangle(frame, (20,272),
+                (20 + int(320 * min(no_hand_elapsed/NO_HAND_TIMEOUT, 1.0)), 288),
+                (80,80,200), -1)
+            if no_hand_elapsed >= NO_HAND_TIMEOUT:
+                self._reset()
+                return ("Action CANCELLED", (0, 0, 255))
+            self._conf_gesture = None
+            self._conf_start   = 0.0
+            return None
+        else:
+            self._no_hand_start = 0.0  # reset timer when hand is present
+
+        # ── Thumb Up / Down confirmation ───────────────────────────────
         if detected in ("Thumb Up", "Thumb Down"):
             if self._conf_gesture != detected:
                 self._conf_gesture = detected
@@ -270,8 +295,9 @@ class GestureControl:
 
             held = time.time() - self._conf_start
             rem  = max(0.0, config.CONFIRM_HOLD_TIME - held)
-            bc   = (0,220,0) if detected=="Thumb Up" else (0,0,220)
-            lbl  = "Thumb UP  (YES)" if detected=="Thumb Up" else "Thumb DOWN  (NO)"
+            is_up = detected == "Thumb Up"
+            bc    = (0, 220, 0) if is_up else (0, 0, 220)
+            lbl   = "Thumb UP  (ON)" if is_up else "Thumb DOWN  (OFF)"
 
             cv2.putText(frame, f"{lbl}   hold {rem:.1f}s",
                         (20,260), cv2.FONT_HERSHEY_SIMPLEX, 0.82, bc, 2)
@@ -281,21 +307,18 @@ class GestureControl:
                 bc, -1)
 
             if held >= config.CONFIRM_HOLD_TIME:
-                if detected == "Thumb Up":
-                    mqtt.publish(dev, act)
-                    self._update_device(dev, act)
-                    feedback = (f"{dev.upper()} {act.upper()} ACTIVATED!",
-                                (0,255,0))
-                else:
-                    feedback = ("Action CANCELLED", (0,0,255))
-
+                final_action = "on" if is_up else "off"
+                mqtt.publish(dev, final_action)
+                self._update_device(dev, final_action)
+                feedback = (f"{dev.upper()} {final_action.upper()} ACTIVATED!",
+                            (0, 255, 0) if is_up else (0, 100, 255))
                 self._reset()
                 return feedback
         else:
             self._conf_gesture = None
             self._conf_start   = 0.0
-            cv2.putText(frame, "Show Thumb UP or DOWN",
-                        (20,260), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180,180,180), 1)
+            cv2.putText(frame, "Show Thumb UP (ON) or DOWN (OFF)",
+                        (20,260), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (180,180,180), 1)
 
         return None
 
@@ -339,12 +362,13 @@ class GestureControl:
 
     # ── Reset all gesture state ───────────────────────────────────────
     def _reset(self):
-        self._state        = _GS_IDLE
-        self._pending      = None
-        self._hold_start   = 0.0
-        self._cur_gesture  = None
-        self._conf_gesture = None
-        self._conf_start   = 0.0
+        self._state         = _GS_IDLE
+        self._pending       = None
+        self._hold_start    = 0.0
+        self._cur_gesture   = None
+        self._conf_gesture  = None
+        self._conf_start    = 0.0
+        self._no_hand_start = 0.0
         self._buf.clear()
 
     # ── FPS display ───────────────────────────────────────────────────
