@@ -1,14 +1,3 @@
-"""
-main.py — Smart Home Face + Gesture Control
-============================================
-Architecture: 3 threads
-  Thread 1 (main)    — camera read + display only, never blocks
-  Thread 2 (face)    — face recognition runs independently
-  Thread 3 (gesture) — hand gesture runs independently
-
-Display thread always runs at full camera FPS.
-Face/gesture run in background and push results into FrameBuffer.
-"""
 
 import cv2
 import time
@@ -20,9 +9,6 @@ from gesture_control import GestureControl
 from mqtt_handler    import MQTTHandler
 
 
-# =====================================================================
-# THREAD-SAFE FRAME BUFFER
-# =====================================================================
 class FrameBuffer:
     def __init__(self):
         self._lock        = threading.Lock()
@@ -55,16 +41,13 @@ class FrameBuffer:
             return self._gesture_out.copy() if self._gesture_out is not None else None
 
 
-# =====================================================================
-# SHARED STATE
-# =====================================================================
 class SharedState:
     def __init__(self):
         self._lock     = threading.Lock()
         self._unlocked = False
         self._name     = ""
         self._key      = -1
-        # Flags for gesture thread to show activation feedback on main frame
+
         self.show_feedback    = False
         self.feedback_msg     = ""
         self.feedback_color   = (0, 255, 0)
@@ -104,9 +87,6 @@ class SharedState:
             return None, None
 
 
-# =====================================================================
-# FACE THREAD
-# =====================================================================
 def face_thread(face, buf, state, stop_event):
     """
     Smart scheduling:
@@ -126,23 +106,17 @@ def face_thread(face, buf, state, stop_event):
         key      = state.get_key()
         unlocked = state.is_unlocked()
 
-        # When unlocked — skip heavy recognition but keep frame buffer fresh
+   
         if unlocked and frame_n % 90 != 0 and key == -1:
             buf.write_face(raw)        # ← keeps gesture thread from freezing
             time.sleep(0.005)
             continue
-
-        # Put key back if we consumed it but are about to skip
-        # (shouldn't happen with above logic but safety net)
         frame = face.process_frame(raw, key)
         face.handle_key(key)
         state.set_auth(face.is_unlocked(), face.unlocked_name())
         buf.write_face(frame)
 
 
-# =====================================================================
-# GESTURE THREAD
-# =====================================================================
 def gesture_thread(gesture, buf, state, mqtt, stop_event):
     """
     Smart scheduling:
@@ -169,9 +143,7 @@ def gesture_thread(gesture, buf, state, mqtt, stop_event):
         buf.write_gesture(frame)
 
 
-# =====================================================================
-# MAIN
-# =====================================================================
+
 def main():
     mqtt    = MQTTHandler()
     face    = FaceAuth()
@@ -179,18 +151,16 @@ def main():
     buf     = FrameBuffer()
     state   = SharedState()
 
-    # ── Camera — buffer size FIRST, then resolution ───────────────────
     cap = cv2.VideoCapture(config.CAMERA_INDEX)
     if not cap.isOpened():
         print("[ERROR] Cannot open camera. Check CAMERA_INDEX in config.py")
         return
 
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)          # must be set first
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)        
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  config.CAMERA_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS,          config.CAMERA_FPS)
 
-    # ── Camera warmup — discard first 10 frames ───────────────────────
     print("[MAIN] Camera warming up...")
     for _ in range(10):
         cap.read()
@@ -207,7 +177,6 @@ def main():
     print("  Resolution: {}x{}".format(config.CAMERA_WIDTH, config.CAMERA_HEIGHT))
     print("========================================\n")
 
-    # ── Start threads ─────────────────────────────────────────────────
     stop_event = threading.Event()
 
     t_face = threading.Thread(
@@ -224,11 +193,9 @@ def main():
     t_gesture.start()
     print("[MAIN] Threads started\n")
 
-    # ── FPS — exponential moving average ──────────────────────────────
     fps      = 0.0
     fps_prev = time.time()
 
-    # ── Display loop ──────────────────────────────────────────────────
     while cap.isOpened():
         ret, raw = cap.read()
         if not ret:
@@ -237,7 +204,6 @@ def main():
 
         buf.write_raw(raw)
 
-        # Best available annotated frame
         display = buf.read_gesture()
         if display is None:
             display = buf.read_face()
@@ -250,11 +216,10 @@ def main():
         if key not in (255, -1):
             state.set_key(key)
 
-        # ── Draw UI overlays (main thread only — safe on Linux) ───────
         face.draw_status_bar(display)
         face.draw_debug(display)
 
-        # Activation feedback banner (replaces imshow in gesture thread)
+
         msg, color = state.get_feedback()
         if msg:
             H = display.shape[0]
@@ -279,7 +244,6 @@ def main():
 
         cv2.imshow(WIN, display)
 
-    # ── Cleanup ───────────────────────────────────────────────────────
     stop_event.set()
     t_face.join(timeout=2)
     t_gesture.join(timeout=2)
@@ -287,7 +251,6 @@ def main():
     cv2.destroyAllWindows()
     mqtt.stop()
     print("\nProgram ended.")
-
 
 if __name__ == '__main__':
     try:
