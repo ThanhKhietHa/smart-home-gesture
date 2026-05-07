@@ -13,9 +13,7 @@ import numpy as np
 from collections import deque
 import config
 
-# =====================================================================
-# MEDIAPIPE
-# =====================================================================
+
 _hand_options = vision.HandLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
@@ -28,20 +26,13 @@ _landmarker = vision.HandLandmarker.create_from_options(_hand_options)
 _GS_IDLE    = "IDLE"
 _GS_CONFIRM = "CONFIRM"
 
-# =====================================================================
-# OPTIMIZATION: Set of valid gestures for quick lookup
-# =====================================================================
+
 _VALID_GESTURES = set(config.GESTURE_COMMANDS.keys())
 
-# =====================================================================
-# GEOMETRY
-# =====================================================================
 def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
-# =====================================================================
-# GESTURE DETECTION — Optimized with early returns
-# =====================================================================
+
 def detect_gesture(lm):
     """
     Returns gesture name string.
@@ -70,48 +61,29 @@ def detect_gesture(lm):
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
 
-        # ── Thumb Up / Down (KEPT) ─────────────────────────────────────
         if n == 0 and tp > 0.18:
             if tv < -0.10: return "Thumb Up"
             if tv >  0.10: return "Thumb Down"
+    
+        if n >= 3:               return "Open Palm"  
+        if n == 0 and tp < 0.22: return "Fist"       
 
-        # ── Open Palm / Fist (KEPT) ────────────────────────────────────
-        if n >= 3 and tp > 0.25: return "Spread"      # REMOVED - will be ignored
-        if n >= 3:               return "Open Palm"   # KEPT
-        if n == 0 and tp < 0.22: return "Fist"        # KEPT
-
-        # ── REMOVED GESTURES (quick return to save CPU) ─────────────────
-        # These gestures are no longer in config, so we return early
-        if ie and me and re and not pe:          
-            return "Three Fingers"   # REMOVED - will be ignored
-            
-        if n == 4 and tp < 0.20:                 
-            return "Four Fingers"    # REMOVED - will be ignored
-            
-        if _dist(thumb_tip, index_tip) < 0.06 and not me and not re:
-            return "Pinch"           # REMOVED - will be ignored
-
-        # ── Peace Sign (KEPT) ──────────────────────────────────────────
         if ie and me and not re and not pe:      
-            return "Peace Sign"      # KEPT
+            return "Peace Sign"     
 
-        # ── Pointing (KEPT: Pointing Up only) ──────────────────────────
         if ie and not me and not re and not pe:
             il = _dist(index_tip, index_mcp)
             ml = _dist(middle_tip, middle_mcp)
             rl = _dist(ring_tip,   ring_mcp)
             if il > ml + 0.03 and il > rl + 0.03:
                 v = index_tip.y - index_mcp.y
-                if v <  -0.12: return "Pointing Up"    # KEPT
+                if v <  -0.12: return "Pointing Up" 
 
         return "Unknown"
 
     except Exception:
         return "No hand"
 
-# =====================================================================
-# GESTURE CONTROLLER
-# =====================================================================
 class GestureControl:
 
     def __init__(self):
@@ -126,11 +98,9 @@ class GestureControl:
         self._buf           = deque(maxlen=6)
         self.device_states = dict(config.DEVICE_INITIAL_STATES)
         
-        # OPTIMIZATION: Pre-filter valid gestures for faster checking
         self._valid_gestures = set(config.GESTURE_COMMANDS.keys())
         print(f"[GESTURE] Active gestures: {list(self._valid_gestures)}")
 
-    # ── Main entry point ──────────────────────────────────────────────
     def process_frame(self, frame, mqtt, face_unlocked):
         """
         Returns (annotated_frame, feedback_or_None).
@@ -143,18 +113,16 @@ class GestureControl:
         except Exception:
             lm = None
 
-        # Safe gesture detection
+
         self._buf.append(detect_gesture(lm))
         detected = self._smooth()
 
-        # OPTIMIZATION: Early reject for invalid gestures (saves UI drawing)
         is_valid = detected in self._valid_gestures
 
-        # Draw hand landmarks (only if gesture might be valid or for feedback)
         if lm is not None:
             try:
                 H, W = frame.shape[:2]
-                # Use different color for invalid gestures
+
                 color = (0, 255, 0) if is_valid else (100, 100, 100)
                 for pt in lm:
                     cx = int(max(0, min(pt.x * W, W-1)))
@@ -162,8 +130,6 @@ class GestureControl:
                     cv2.circle(frame, (cx, cy), 3, color, -1)
             except Exception:
                 pass
-
-        # Blocked — face not authenticated
         if not face_unlocked:
             self._reset()
             cv2.putText(frame, "FACE AUTH REQUIRED",
@@ -172,16 +138,15 @@ class GestureControl:
             self._draw_devices(frame)
             return frame, None
 
-        # Route to state (only valid gestures proceed)
         feedback = None
         if self._state == _GS_CONFIRM:
             feedback = self._do_confirm(frame, detected, mqtt)
         else:
-            # Only show detection UI for valid gestures or during confirm
+
             if is_valid or self._pending is not None:
                 self._do_detection(frame, detected)
             else:
-                # Show minimal UI for unrecognized gestures
+  
                 cv2.putText(frame, f"Gesture: {detected} (not mapped)",
                             (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
                             0.7, (100, 100, 100), 1)
@@ -189,7 +154,6 @@ class GestureControl:
         self._draw_devices(frame)
         return frame, feedback
 
-    # ── Gesture smoothing — majority vote ─────────────────────────────
     def _smooth(self):
         if not self._buf:
             return "No hand"
@@ -201,9 +165,9 @@ class GestureControl:
             return best
         return "Unknown"
 
-    # ── IDLE / HOLDING state ──────────────────────────────────────────
+
     def _do_detection(self, frame, detected):
-        # Only proceed if gesture is in config
+     
         if detected not in self._valid_gestures:
             self._pending = None
             self._hold_start = 0.0
@@ -240,11 +204,9 @@ class GestureControl:
             self._pending     = None
             self._hold_start  = 0.0
 
-    # ── CONFIRM state ─────────────────────────────────────────────────
     def _do_confirm(self, frame, detected, mqtt):
         dev, act = config.GESTURE_COMMANDS.get(self._cur_gesture, ("?","?"))
 
-        # Yellow border
         cv2.rectangle(frame, (0,0),
                       (frame.shape[1]-1, frame.shape[0]-1), (0,200,255), 5)
         cv2.putText(frame, "CONFIRM ACTION?",
@@ -266,7 +228,6 @@ class GestureControl:
 
         NO_HAND_TIMEOUT = 3.0
 
-        # ── No-hand timeout → cancel ───────────────────────────────────
         if detected in ("No hand", "Unknown"):
             if self._no_hand_start == 0.0:
                 self._no_hand_start = time.time()
@@ -285,9 +246,8 @@ class GestureControl:
             self._conf_start   = 0.0
             return None
         else:
-            self._no_hand_start = 0.0  # reset timer when hand is present
-
-        # ── Thumb Up / Down confirmation ───────────────────────────────
+            self._no_hand_start = 0.0  
+ 
         if detected in ("Thumb Up", "Thumb Down"):
             if self._conf_gesture != detected:
                 self._conf_gesture = detected
@@ -322,7 +282,6 @@ class GestureControl:
 
         return None
 
-    # ── Device state update ───────────────────────────────────────────
     def _update_device(self, device, action):
         if action == "toggle":
             cur = self.device_states.get(device, 0)
@@ -332,7 +291,6 @@ class GestureControl:
         else:
             self.device_states[device] = 1 if action == "on" else 0
 
-    # ── Device panel ──────────────────────────────────────────────────
     def _draw_devices(self, frame):
         H, W = frame.shape[:2]
         n    = len(self.device_states)
@@ -360,7 +318,6 @@ class GestureControl:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
             y += lh
 
-    # ── Reset all gesture state ───────────────────────────────────────
     def _reset(self):
         self._state         = _GS_IDLE
         self._pending       = None
@@ -371,7 +328,6 @@ class GestureControl:
         self._no_hand_start = 0.0
         self._buf.clear()
 
-    # ── FPS display ───────────────────────────────────────────────────
     def draw_fps(self, frame, fps):
         cv2.putText(frame, f"FPS: {fps:.1f}",
                     (frame.shape[1]-115, frame.shape[0]-10),
