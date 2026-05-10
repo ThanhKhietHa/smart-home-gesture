@@ -37,7 +37,7 @@ from mqtt_handler    import MQTTHandler
 # How often face presence check runs when unlocked (every N face-thread ticks)
 # Higher = more CPU for gesture, lower = faster relock detection
 # At 10 FPS camera: 5 = check every 0.5s, fine for 2s grace period
-PRESENCE_EVERY = 5
+PRESENCE_EVERY = 10
 
 
 # =====================================================================
