@@ -38,7 +38,7 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # =====================================================================
 CAMERA_INDEX  = 0
 CAMERA_WIDTH  = 640
-CAMERA_HEIGHT = 360
+CAMERA_HEIGHT = 480
 CAMERA_FPS    = 30
 
 # =====================================================================
