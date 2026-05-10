@@ -379,57 +379,62 @@ class FaceAuth:
         return self._state_recognise(frame, result, lm, box, key)
 
     def _state_recognise(self, frame, result, lm, box, key):
-        # Frame skipping for recognition only
         self._frame_counter += 1
-        
+
         if not self._unlocked:
-            # When locked: process every Nth frame for recognition
             process_this_frame = (self._frame_counter % getattr(config, 'FACE_PROCESS_EVERY_N_FRAMES_LOCKED', 2) == 0)
-            
+
             if process_this_frame and box is not None:
-                # Run full recognition
                 track_id, is_new = self._tracker.update(box)
                 self._grace_count = 0
-                
+
                 H = frame.shape[0]
                 if result and result.face_landmarks:
                     ys = [pt.y*H for pt in result.face_landmarks[0]]
                     face_ok = (max(ys)-min(ys))/H >= config.FACE_MIN_HEIGHT_FRAC
                 else:
                     face_ok = True if self._tracker.box else False
-                
+
                 if face_ok and lm is not None:
                     self._run_recognition(lm, frame.shape, track_id)
             else:
-                # Just update tracker with box
                 if box is not None:
                     self._tracker.update(box)
                     self._grace_count = 0
                 else:
                     self._tracker.lost()
                     self._grace_count += 1
-            
-            # Draw box (locked state)
+
+            # ALWAYS draw box when face is visible — even on skip frames
+            # This is what shows "someone appeared" during scanning
             if box is not None:
                 x1, y1, x2, y2 = box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 60, 220), 2)
                 name_label = self._last_cand if self._last_cand != "—" else "Scanning..."
                 cv2.putText(frame, name_label, (x1, max(y1-10, 85)),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 100, 255), 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 100, 255), 2)
+                # Draw face landmarks for visual feedback during scan
+                if result and result.face_landmarks:
+                    H, W = frame.shape[:2]
+                    for pt in result.face_landmarks[0]:
+                        cv2.circle(frame,
+                                   (int(pt.x*W), int(pt.y*H)), 1, (0, 80, 200), -1)
+            else:
+                # No face — show idle message so user knows to look at camera
+                cv2.putText(frame, "No face detected — look at camera",
+                            (20, 130), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7, (80, 80, 200), 1)
+
         else:
-            # When unlocked: use lightweight presence check only
-            # Recognition skipped entirely
             return self.check_presence(frame, box)
 
-        # Auth timeout check
-        if (self._unlocked and 
-            (time.time() - self._unlock_time) > config.FACE_AUTH_TIMEOUT):
+        if (self._unlocked and
+                (time.time() - self._unlock_time) > config.FACE_AUTH_TIMEOUT):
             self._force_relock("Session timeout")
 
-        # Red border when locked
         if not self._unlocked:
-            cv2.rectangle(frame, (0,0), (frame.shape[1]-1, frame.shape[0]-1),
-                         (0,0,200), 4)
+            cv2.rectangle(frame, (0,0),
+                          (frame.shape[1]-1, frame.shape[0]-1), (0,0,200), 4)
 
         return frame
 
