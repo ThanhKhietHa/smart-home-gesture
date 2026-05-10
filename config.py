@@ -2,6 +2,18 @@
 config.py — Central configuration for Smart Home Gesture Control
 ================================================================
 Change settings HERE only. Do not edit other files for configuration.
+
+Gesture flow (2-level menu):
+  Level 1 — Entry gesture selects device:
+    Open Palm   → Lights menu
+    Peace Sign  → Door menu
+    Pointing Up → AC menu
+    Thumb Up    → Window menu   (long-hold GESTURE_HOLD_TIME)
+
+  Level 2 — Action gesture inside menu:
+    Thumb Up    → ON  / Roll Up / Confirm toggle
+    Thumb Down  → OFF / Roll Down
+    Open Palm   → Cancel (always exits back to idle)
 """
 
 import os
@@ -32,12 +44,15 @@ CAMERA_FPS    = 30
 # =====================================================================
 # PERFORMANCE OPTIMIZATIONS
 # =====================================================================
-FACE_PROCESS_EVERY_N_FRAMES_LOCKED   = 5   # MediaPipe face ~30ms, skip frames when locked
-FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED = 90  # kept for compat, not used (Haar runs every frame)
-GESTURE_PROCESS_EVERY_N_FRAMES       = 3   # hand MediaPipe every 3 frames when unlocked
+# How often face recognition runs when LOCKED (every N frames)
+FACE_PROCESS_EVERY_N_FRAMES_LOCKED    = 2
+# How often FULL face recognition runs when UNLOCKED (presence check runs every frame)
+FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED  = 90
+# MediaPipe model inference mutex — face+hand never run simultaneously
+# (enforced in main.py via threading.Lock)
 
 FACE_DETECTION_CONFIDENCE = 0.35
-FACE_PRESENCE_CONFIDENCE = 0.35
+FACE_PRESENCE_CONFIDENCE  = 0.35
 
 # =====================================================================
 # MQTT — Shiftr.io cloud broker
@@ -67,23 +82,73 @@ FACE_MIN_HEIGHT_FRAC = 0.20
 HAND_DETECTION_CONFIDENCE = 0.5
 HAND_TRACKING_CONFIDENCE  = 0.4
 
-GESTURE_HOLD_TIME    = 1.5
-CONFIRM_HOLD_TIME    = 0.6
-CONFIRM_ENTRY_DELAY  = 0.6
+# How long to hold entry gesture before entering device menu (seconds)
+GESTURE_HOLD_TIME   = 1.5
+# How long to hold action gesture (Thumb Up/Down) to confirm action
+ACTION_HOLD_TIME    = 0.8
+# Brief delay after entering menu before action gestures are accepted
+#   (prevents accidental immediate confirm from entry gesture motion)
+MENU_ENTRY_DELAY    = 0.5
+# How long menu stays open with no valid gesture before auto-cancel
+MENU_TIMEOUT        = 8.0
 
 # =====================================================================
-# DEVICE → GESTURE MAPPING (Updated - Removed fan/curtains gestures)
+# DEVICE MENU DEFINITIONS
+# 2-level gesture flow:
+#   ENTRY_GESTURES: gesture → device label shown in menu
+#   DEVICE_MENUS:   device  → { action_gesture: (mqtt_device, mqtt_action, display_label) }
+#
+# Open Palm is the universal cancel — handled in code, not listed here.
 # =====================================================================
-GESTURE_COMMANDS = {
-    "Open Palm":     ("lights",   "toggle"),
-    "Peace Sign":    ("door",     "toggle"),
-    "Pointing Up":   ("ac",       "toggle"),
-    "Thumb Up":      ("window",   "toggle"),
+
+# Level 1 — which gesture opens which device menu
+ENTRY_GESTURES = {
+    "Open Palm":   "lights",
+    "Peace Sign":  "door",
+    "Pointing Up": "ac",
+    "Thumb Up":    "window",   # long-hold → window menu
 }
 
+# Level 2 — inside each device menu
+DEVICE_MENUS = {
+    "lights": {
+        "Thumb Up":   ("lights", "on",  "Lights ON"),
+        "Thumb Down": ("lights", "off", "Lights OFF"),
+    },
+    "door": {
+        "Thumb Up":   ("door", "toggle", "Door TOGGLE"),
+    },
+    "ac": {
+        "Thumb Up":   ("ac", "on",  "AC ON"),
+        "Thumb Down": ("ac", "off", "AC OFF"),
+    },
+    "window": {
+        "Thumb Up":   ("window", "roll_up",   "Window UP"),
+        "Thumb Down": ("window", "roll_down", "Window DOWN"),
+    },
+}
+
+# Menu display names and entry hint text
+DEVICE_DISPLAY = {
+    "lights": "LIGHTS",
+    "door":   "DOOR",
+    "ac":     "AC",
+    "window": "WINDOW",
+}
+
+DEVICE_ACTION_HINTS = {
+    "lights": "Thumb UP = ON   |   Thumb DOWN = OFF   |   Open Palm = Cancel",
+    "door":   "Thumb UP = Toggle   |   Open Palm = Cancel",
+    "ac":     "Thumb UP = ON   |   Thumb DOWN = OFF   |   Open Palm = Cancel",
+    "window": "Thumb UP = Roll Up  |  Thumb DOWN = Roll Down  |  Open Palm = Cancel",
+}
+
+# =====================================================================
+# DEVICE INITIAL STATES (for on-screen panel)
+# =====================================================================
 DEVICE_INITIAL_STATES = {
-    "lights":   0,
-    "door":     0,
-    "ac":       0,
-    "window":   0,
+    "lights": 0,
+    "door":   0,
+    "ac":     0,
+    "window": "stopped",
 }
