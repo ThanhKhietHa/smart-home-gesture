@@ -45,7 +45,7 @@ CAMERA_FPS    = 30
 # PERFORMANCE OPTIMIZATIONS
 # =====================================================================
 # How often face recognition runs when LOCKED (every N frames)
-FACE_PROCESS_EVERY_N_FRAMES_LOCKED    = 2
+FACE_PROCESS_EVERY_N_FRAMES_LOCKED    = 3
 # How often FULL face recognition runs when UNLOCKED (presence check runs every frame)
 FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED  = 90
 # MediaPipe model inference mutex — face+hand never run simultaneously
