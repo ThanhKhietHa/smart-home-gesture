@@ -1,29 +1,4 @@
-"""
-main.py — Smart Home Face + Gesture Control
-============================================
-Architecture: 3 threads, NO inference mutex
 
-WHY NO MUTEX:
-  Previous versions used threading.Lock() around MediaPipe calls.
-  This caused face thread to starve gesture thread — face re-acquires
-  the lock immediately after releasing, gesture thread never schedules.
-  Result: gesture ran at ~2 FPS, display froze when face disappeared.
-
-  MediaPipe XNNPACK backend handles concurrent calls safely on its own.
-  Removing the mutex lets both threads run at their natural rate.
-
-FRAME DEDUPLICATION:
-  Face thread tracks the last frame pointer it processed. If buf.raw
-  hasn't changed (same object), it sleeps and tries again. This prevents
-  re-running inference on the same camera frame 3-4 times per second.
-
-THREAD SCHEDULING:
-  LOCKED:   face thread runs every frame, gesture thread sleeps 20ms
-  UNLOCKED: face thread runs presence_only every PRESENCE_EVERY frames
-            (not every single frame), gesture runs every frame
-  Both threads yield with time.sleep after each inference call so the
-  OS scheduler can switch threads naturally.
-"""
 
 import cv2
 import time
@@ -34,26 +9,20 @@ from face_auth       import FaceAuth
 from gesture_control import GestureControl
 from mqtt_handler    import MQTTHandler
 
-# How often face presence check runs when unlocked (every N face-thread ticks)
-# Higher = more CPU for gesture, lower = faster relock detection
-# At 10 FPS camera: 5 = check every 0.5s, fine for 2s grace period
+
 PRESENCE_EVERY = 5
 
-
-# =====================================================================
-# THREAD-SAFE FRAME BUFFER  — uses frame_id to detect new frames
-# =====================================================================
 class FrameBuffer:
     def __init__(self):
         self._lock        = threading.Lock()
         self._raw         = None
-        self._raw_id      = 0        # increments every write_raw
+        self._raw_id      = 0      
         self._face_out    = None
         self._gesture_out = None
 
     def write_raw(self, frame):
         with self._lock:
-            self._raw    = frame     # no copy — main thread owns it until next write
+            self._raw    = frame    
             self._raw_id += 1
 
     def read_raw(self):
@@ -85,9 +54,6 @@ class FrameBuffer:
             self._gesture_out = None
 
 
-# =====================================================================
-# SHARED STATE
-# =====================================================================
 class SharedState:
     def __init__(self):
         self._lock          = threading.Lock()
@@ -128,9 +94,6 @@ class SharedState:
             return None, None
 
 
-# =====================================================================
-# FACE THREAD
-# =====================================================================
 def face_thread(face, buf, state, stop_event):
     """
     Runs face recognition / presence check.
@@ -156,39 +119,36 @@ def face_thread(face, buf, state, stop_event):
         key      = state.get_key()
         unlocked = state.is_unlocked()
 
-        # Detect relock transition → clear stale gesture overlay
+
         if was_unlocked and not unlocked:
             buf.clear_gesture()
         was_unlocked = unlocked
 
-        # Key handling always runs first (state transitions before inference)
+
         face.handle_key(key)
 
         if unlocked:
-            # Every 90 ticks: full re-recognition to verify user still there
+  
             if tick % 90 == 0:
                 frame = face.process_frame(raw)
-            # Every PRESENCE_EVERY ticks: lightweight presence check
+    
             elif tick % PRESENCE_EVERY == 0:
                 frame = face.process_presence_only(raw)
             else:
-                # Most ticks: just write raw so gesture thread has fresh base
+  
                 buf.write_face(raw)
                 state.set_auth(face.is_unlocked(), face.unlocked_name())
                 continue
         else:
-            # Locked: full recognition every frame
+
             frame = face.process_frame(raw)
 
         state.set_auth(face.is_unlocked(), face.unlocked_name())
         buf.write_face(frame)
-        # Small yield so gesture thread gets CPU time
+
         time.sleep(0.002)
 
 
-# =====================================================================
-# GESTURE THREAD
-# =====================================================================
 def gesture_thread(gesture, buf, state, mqtt, stop_event):
     """
     Runs hand gesture detection when unlocked.
@@ -199,7 +159,6 @@ def gesture_thread(gesture, buf, state, mqtt, stop_event):
 
     while not stop_event.is_set():
         if not state.is_unlocked():
-            # Clear gesture state so re-entry starts fresh
             gesture.reset()
             time.sleep(0.020)
             last_face_frame = None
@@ -212,9 +171,6 @@ def gesture_thread(gesture, buf, state, mqtt, stop_event):
         if base is None:
             time.sleep(0.008)
             continue
-
-        # Skip if base frame looks identical to last processed
-        # (cheap pointer/shape check — avoids duplicate inference)
         frame_sig = (base.shape, base[0, 0, 0] if base.size > 0 else 0)
         if frame_sig == last_face_frame:
             time.sleep(0.003)
@@ -226,10 +182,6 @@ def gesture_thread(gesture, buf, state, mqtt, stop_event):
             state.set_feedback(feedback[0], feedback[1])
         buf.write_gesture(frame)
 
-
-# =====================================================================
-# MAIN
-# =====================================================================
 def main():
     mqtt    = MQTTHandler()
     face    = FaceAuth()
@@ -237,10 +189,6 @@ def main():
     buf     = FrameBuffer()
     state   = SharedState()
 
-    # Camera init — MJPG mode MUST be set before resolution/FPS
-    # Default OpenCV picks YUYV which saturates USB 2.0 at ~10 FPS.
-    # MJPEG compresses in-camera; USB carries ~3x less data = 30 FPS possible.
-    # Critical order: open -> FOURCC -> resolution -> FPS -> buffersize
     cap = cv2.VideoCapture(config.CAMERA_INDEX, cv2.CAP_V4L2)
     if not cap.isOpened():
         print("[ERROR] Cannot open camera. Check CAMERA_INDEX in config.py")
