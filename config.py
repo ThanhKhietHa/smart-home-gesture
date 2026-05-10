@@ -37,8 +37,8 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # CAMERA — OPTIMIZED for Jetson Orin Nano
 # =====================================================================
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640
-CAMERA_HEIGHT = 480
+CAMERA_WIDTH  = 432
+CAMERA_HEIGHT = 240
 CAMERA_FPS    = 30
 
 # =====================================================================
