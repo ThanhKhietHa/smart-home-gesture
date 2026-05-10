@@ -37,15 +37,16 @@ os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 # CAMERA — OPTIMIZED for Jetson Orin Nano
 # =====================================================================
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640
-CAMERA_HEIGHT = 360
+CAMERA_WIDTH  = 1280   # explicitly listed in camera MJPG modes
+CAMERA_HEIGHT = 702    # native resolution avoids YUYV fallback
 CAMERA_FPS    = 30
+# MediaPipe resizes input internally so 1280x702 costs almost nothing extra
 
 # =====================================================================
 # PERFORMANCE OPTIMIZATIONS
 # =====================================================================
 # How often face recognition runs when LOCKED (every N frames)
-FACE_PROCESS_EVERY_N_FRAMES_LOCKED    = 3
+FACE_PROCESS_EVERY_N_FRAMES_LOCKED    = 2
 # How often FULL face recognition runs when UNLOCKED (presence check runs every frame)
 FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED  = 90
 # MediaPipe model inference mutex — face+hand never run simultaneously
