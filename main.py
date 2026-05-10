@@ -109,32 +109,41 @@ class SharedState:
 # =====================================================================
 def face_thread(face, buf, state, stop_event):
     """
-    Always writes raw frame FIRST before processing — display never freezes.
-    Then runs process_frame on a private copy and overwrites with annotated result.
+    Always writes raw first (freeze fix), then processes on private copy.
 
-    process_frame() handles all scheduling internally:
-      LOCKED   → full MediaPipe every N frames (recognition)
-      UNLOCKED → full MediaPipe via check_presence (presence + grace counter)
-                 Grace counter increments correctly every frame so relock works.
+    KEY FIX — skip duplicate frames:
+      Camera produces 30fps but this thread can loop much faster.
+      Running MediaPipe on the same frame repeatedly burns CPU for zero
+      new information → thermal throttle → FPS drops from 15 to 10.
+      We track the last raw frame's id() and skip if nothing new arrived.
+
+    LOCKED:   runs MediaPipe every frame (new frames only) for fast recognition.
+    UNLOCKED: runs check_presence every frame (new frames only) for grace counter.
     """
+    last_raw_id = None
+
     while not stop_event.is_set():
         raw = buf.read_raw()
         if raw is None:
             time.sleep(0.008)
             continue
 
-        # Step 1: push raw immediately — display never stalls during inference
+        # Skip if camera hasn't produced a new frame yet
+        raw_id = id(raw)
+        if raw_id == last_raw_id:
+            time.sleep(0.004)   # yield CPU, wait for next camera frame
+            continue
+        last_raw_id = raw_id
+
+        # Write raw immediately — display never stalls during inference
         buf.write_face(raw)
 
-        key = state.get_key()
-
-        # Step 2: run on private copy so buf stays live during ~30ms inference
-        work      = raw.copy()
-        frame     = face.process_frame(work, key)
+        key   = state.get_key()
+        work  = raw.copy()
+        frame = face.process_frame(work, key)
         face.handle_key(key)
         state.set_auth(face.is_unlocked(), face.unlocked_name())
 
-        # Step 3: replace with annotated result
         buf.write_face(frame)
 
 
