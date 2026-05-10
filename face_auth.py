@@ -1,623 +1,411 @@
 """
-face_auth.py — Face Recognition + Centroid Tracker (Sticky ID)
-===============================================================
-Key design:
-  LOCKED   → full MediaPipe landmarker every N frames (~30ms)
-  UNLOCKED → Haar cascade presence only (~3ms), MediaPipe never runs
-             Only re-runs MediaPipe after face confirmed gone by Haar
-             for GRACE_FRAMES consecutive frames → then relock.
+gesture_control.py — Hand Gesture Recognition & Device Control
+==============================================================
+2-Level Menu System:
+  Level 1 (IDLE):    Hold entry gesture 1.5s → enter device menu
+  Level 2 (IN_MENU): Show action options for that device
+                     Thumb Up / Thumb Down = action (hold 0.8s)
+                     Open Palm             = cancel (always)
+  Timeout: menu auto-cancels after MENU_TIMEOUT seconds
 
-Sticky ID:
-  _CentroidTracker assigns a persistent integer ID per detected face.
-  IOU >= 0.30 between consecutive boxes → same ID (same person).
-  New box with low IOU → new ID → triggers re-recognition when locked.
-  When unlocked: ID is pinned at unlock time. Haar just checks presence.
+Fixes vs previous version:
+  - No more Thumb Up/Down double-role conflict
+  - Confirm timeout (MENU_TIMEOUT)
+  - Open Palm is universal cancel, never an entry gesture while in menu
+  - Pointing Down removed (was unmappable reliably)
+  - Inference mutex passed in from main.py — face+hand never overlap
 """
 
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-import numpy as np
-import pickle
-import os
+import math
 import time
+import numpy as np
 from collections import deque
-
 import config
 
 # =====================================================================
-# TUNABLE CONSTANTS
+# MEDIAPIPE — created once at module level
 # =====================================================================
-GRACE_FRAMES  = 20          # frames of no face before relock (~2s at 10fps)
-IOU_THRESHOLD = 0.30
-
-# =====================================================================
-# MEDIAPIPE — full landmarker (used ONLY when locked)
-# =====================================================================
-_face_options = vision.FaceLandmarkerOptions(
-    base_options=python.BaseOptions(model_asset_path=config.FACE_MODEL_PATH),
+_hand_options = vision.HandLandmarkerOptions(
+    base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
-    num_faces=1,
-    min_face_detection_confidence=getattr(config, 'FACE_DETECTION_CONFIDENCE', 0.35),
-    min_face_presence_confidence=getattr(config, 'FACE_PRESENCE_CONFIDENCE', 0.35),
-    output_facial_transformation_matrixes=False,
+    num_hands=1,
+    min_hand_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
+    min_tracking_confidence=config.HAND_TRACKING_CONFIDENCE,
 )
-_landmarker = vision.FaceLandmarker.create_from_options(_face_options)
+_landmarker = vision.HandLandmarker.create_from_options(_hand_options)
 
 # =====================================================================
-# HAAR CASCADE — lightweight presence (~3ms, used ONLY when unlocked)
+# STATES
 # =====================================================================
-_haar = cv2.CascadeClassifier(
-    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-def _haar_box(frame):
-    """
-    Returns (x1,y1,x2,y2) or None. ~3ms on Jetson.
-    Loose settings so brief head-turns don't immediately relock.
-    """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    hits = _haar.detectMultiScale(gray, scaleFactor=1.2,
-                                  minNeighbors=2, minSize=(60, 60))
-    if len(hits) == 0:
-        return None
-    x, y, w, h = hits[0]
-    return (x, y, x + w, y + h)
+_GS_IDLE    = "IDLE"      # waiting for entry gesture
+_GS_HOLDING = "HOLDING"   # entry gesture detected, counting hold time
+_GS_MENU    = "MENU"      # inside device menu, waiting for action gesture
 
 # =====================================================================
-# LANDMARK INDICES
+# GEOMETRY
 # =====================================================================
-_NOSE        = 4
-_LEFT_EYE    = 33
-_RIGHT_EYE   = 263
-_LEFT_MOUTH  = 61
-_RIGHT_MOUTH = 291
-_CHIN        = 152
-_STABLE = [4, 6, 8, 9, 10, 33, 133, 159, 145, 263,
-           234, 454, 152, 13, 61, 291, 70, 300, 168, 197]
+def _dist(p1, p2):
+    return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (p1.z - p2.z)**2)
 
 # =====================================================================
-# APP STATES
+# GESTURE DETECTION
+# Detects only gestures used in the system — fast early returns for rest
 # =====================================================================
-_ST_RECOGNISE = "RECOGNISE"
-_ST_TYPING    = "TYPING"
-_ST_ENROLLING = "ENROLLING"
-_ST_DELETE    = "DELETE"
-
-# =====================================================================
-# CENTROID TRACKER — sticky ID
-# =====================================================================
-class _CentroidTracker:
-    __slots__ = ('_box', '_centroid', '_id', '_age')
-
-    def __init__(self):
-        self._box      = None
-        self._centroid = None
-        self._id       = 0
-        self._age      = 0
-
-    @staticmethod
-    def _iou(a, b):
-        xA = max(a[0], b[0]); yA = max(a[1], b[1])
-        xB = min(a[2], b[2]); yB = min(a[3], b[3])
-        inter = max(0, xB - xA) * max(0, yB - yA)
-        if inter == 0:
-            return 0.0
-        aA = (a[2]-a[0]) * (a[3]-a[1])
-        aB = (b[2]-b[0]) * (b[3]-b[1])
-        return inter / float(aA + aB - inter + 1e-6)
-
-    def update(self, box):
-        """Returns (track_id, is_new_person)."""
-        if box is None:
-            self._age += 1
-            return self._id, False
-        if self._box is None:
-            self._box      = box
-            self._centroid = ((box[0]+box[2])//2, (box[1]+box[3])//2)
-            self._id      += 1
-            self._age      = 0
-            return self._id, True
-        iou = self._iou(self._box, box)
-        self._box      = box
-        self._centroid = ((box[0]+box[2])//2, (box[1]+box[3])//2)
-        self._age      = 0
-        if iou >= IOU_THRESHOLD:
-            return self._id, False   # same person
-        self._id += 1
-        return self._id, True        # new person → re-recognise
-
-    def lost(self):
-        self._age += 1
-
-    def reset(self):
-        self._box = None; self._centroid = None; self._age = 0
-
-    @property
-    def age(self):  return self._age
-    @property
-    def box(self):  return self._box
-
-# =====================================================================
-# LANDMARK HELPERS
-# =====================================================================
-def _to_np(result):
-    if not result.face_landmarks:
-        return None
-    return np.array([[l.x, l.y, l.z] for l in result.face_landmarks[0]],
-                    dtype=np.float32)
-
-def _get_box(result, shape):
-    if not result.face_landmarks:
-        return None
-    H, W = shape[:2]
-    xs = [l.x * W for l in result.face_landmarks[0]]
-    ys = [l.y * H for l in result.face_landmarks[0]]
-    return (int(min(xs))-10, int(min(ys))-10,
-            int(max(xs))+10, int(max(ys))+10)
-
-def _normalize(lm):
-    nose     = lm[_NOSE].copy()
-    eye_dist = np.linalg.norm(lm[_LEFT_EYE] - lm[_RIGHT_EYE]) + 1e-6
-    return (lm - nose) / eye_dist
-
-def _stable(lm_n):
-    return lm_n[_STABLE]
-
-def _head_pose(lm, shape):
-    h, w = shape[:2]
-    idx  = [_NOSE, _CHIN, _LEFT_EYE, _RIGHT_EYE, _LEFT_MOUTH, _RIGHT_MOUTH]
-    p2d  = np.array([[lm[i,0]*w, lm[i,1]*h] for i in idx], dtype=np.float32)
-    cam  = np.array([[w,0,w/2],[0,w,h/2],[0,0,1]], dtype=np.float32)
-    obj  = np.array([[0,0,0],[0,-63.6,-12.5],[-43.3,32.7,-26],
-                     [43.3,32.7,-26],[-28.9,-28.9,-24.1],[28.9,-28.9,-24.1]],
-                    dtype=np.float32)
-    _, rv, _ = cv2.solvePnP(obj, p2d, cam, np.zeros((4,1), np.float32))
-    R, _     = cv2.Rodrigues(rv)
-    yaw   = float(np.degrees(np.arctan2(R[1,0], R[0,0])))
-    pitch = float(np.degrees(np.arctan2(-R[2,0],
-                  np.sqrt(R[2,1]**2 + R[2,2]**2))))
-    return yaw, pitch
-
-def _shape_err(a, b):
-    return float(np.mean(np.linalg.norm(a-b, axis=1)))
-
-def _cosine_err(a, b):
-    af, bf = a.flatten(), b.flatten()
-    return float(1.0 - np.dot(af,bf) /
-                 (np.linalg.norm(af)*np.linalg.norm(bf)+1e-6))
-
-# =====================================================================
-# DATABASE
-# =====================================================================
-def _load_db():
-    if not os.path.exists(config.ENROLLED_FILE):
-        return {}
+def detect_gesture(lm):
     try:
-        with open(config.ENROLLED_FILE, 'rb') as f:
-            db = pickle.load(f)
-        print(f"[FACE] Loaded {len(db)} enrolled face(s): {list(db.keys())}")
-        return db
-    except Exception as e:
-        print(f"[FACE] Could not load enrolled faces: {e}")
-        return {}
+        if not lm or len(lm) < 21:
+            return "No hand"
 
-def _save_db(db):
-    with open(config.ENROLLED_FILE, 'wb') as f:
-        pickle.dump(db, f)
+        wrist      = lm[0]
+        thumb_tip  = lm[4];  thumb_cmc  = lm[1]
+        index_tip  = lm[8];  index_mcp  = lm[5]
+        middle_tip = lm[12]; middle_mcp = lm[9]
+        ring_tip   = lm[16]; ring_mcp   = lm[13]
+        pinky_tip  = lm[20]; pinky_mcp  = lm[17]
 
-def _identify(lm_n, db):
-    if not db:
-        return 'Unknown', 999.0, 999.0, False
-    st = _stable(lm_n)
-    best_n, best_se, best_ie = 'Unknown', 999.0, 999.0
-    for name, data in db.items():
-        se = _shape_err(st, data['stable'])
-        ie = _cosine_err(st, data['stable'])
-        if (0.5*se + 0.5*ie) < (0.5*best_se + 0.5*best_ie):
-            best_n, best_se, best_ie = name, se, ie
-    match = (best_se < config.FACE_SHAPE_THRESHOLD and
-             best_ie < config.FACE_IDENTITY_THRESHOLD)
-    if not match:
-        best_n = 'Unknown'
-    return best_n, best_se, best_ie, match
+        def ext(tip, mcp, thr=0.07):
+            return tip.y < mcp.y - thr
 
-# =====================================================================
-# KEYBOARD UI (unchanged)
-# =====================================================================
-_KB_ROWS = [
-    list("QWERTYUIOP"),
-    list("ASDFGHJKL"),
-    list("ZXCVBNM") + ["DEL", "OK"],
-]
-_KB_H = 165
+        ie = ext(index_tip,  index_mcp)
+        me = ext(middle_tip, middle_mcp)
+        re = ext(ring_tip,   ring_mcp)
+        pe = ext(pinky_tip,  pinky_mcp)
+        n  = sum([ie, me, re, pe])           # number of extended fingers
 
-def _draw_keyboard(frame, typed):
-    h, w  = frame.shape[:2]
-    panel = np.full((_KB_H, w, 3), 30, dtype=np.uint8)
-    cv2.rectangle(panel, (10,5), (w-10,38), (50,50,50), -1)
-    cv2.putText(panel, typed+"|", (16,30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,200), 2)
-    cv2.putText(panel, "Type name then OK  |  ESC=cancel",
-                (w-340,26), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (150,150,150), 1)
-    KH = 34
-    for ri, row in enumerate(_KB_ROWS):
-        n    = len(row)
-        kw   = (w-20)//10
-        yt   = 44 + ri*(KH+5)
-        xoff = (w - n*(kw+4))//2
-        for ci, ch in enumerate(row):
-            kx = xoff + ci*(kw+4)
-            bw = kw*2 if ch in ("DEL","OK") else kw
-            bg = (0,110,0) if ch=="OK" else (110,0,0) if ch=="DEL" else (65,65,88)
-            cv2.rectangle(panel, (kx,yt), (kx+bw,yt+KH), bg, -1)
-            cv2.rectangle(panel, (kx,yt), (kx+bw,yt+KH), (130,130,130), 1)
-            tx = kx + max((bw-len(ch)*8)//2, 2)
-            cv2.putText(panel, ch, (tx,yt+23),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255,255,255), 1)
-    cv2.putText(panel, "Click keys  |  Enter=confirm  |  ESC=cancel",
-                (10,_KB_H-6), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (130,130,130), 1)
-    return np.vstack([frame, panel])
+        tp = _dist(thumb_tip, wrist)         # thumb-to-wrist distance
+        tv = thumb_tip.y - thumb_cmc.y       # thumb vertical: -=up, +=down
 
-def _kb_hittest(fh, fw, mx, my, typed):
-    if my < fh:
-        return typed, False, False
-    ry = my - fh
-    KH = 34
-    for ri, row in enumerate(_KB_ROWS):
-        n    = len(row)
-        kw   = (fw-20)//10
-        yt   = 44 + ri*(KH+5)
-        if not (yt <= ry <= yt+KH):
-            continue
-        xoff = (fw - n*(kw+4))//2
-        for ci, ch in enumerate(row):
-            kx = xoff + ci*(kw+4)
-            bw = kw*2 if ch in ("DEL","OK") else kw
-            if kx <= mx <= kx+bw:
-                if ch == "DEL":  return typed[:-1], False, False
-                elif ch == "OK": return typed, bool(typed.strip()), False
-                else:            return typed+ch,  False,           False
-    return typed, False, False
+        # ── Thumb Up / Thumb Down ──────────────────────────────────────
+        # All fingers closed, thumb extended up or down
+        if n == 0 and tp > 0.18:
+            if tv < -0.10:
+                return "Thumb Up"
+            if tv > 0.10:
+                return "Thumb Down"
+
+        # ── Open Palm ─────────────────────────────────────────────────
+        # 3+ fingers extended (spread check dropped — Open Palm = universal)
+        if n >= 3:
+            return "Open Palm"
+
+        # ── Fist ──────────────────────────────────────────────────────
+        # All fingers closed, thumb also close
+        if n == 0 and tp < 0.22:
+            return "Fist"
+
+        # ── Peace Sign ────────────────────────────────────────────────
+        # Index + middle up, ring + pinky down
+        if ie and me and not re and not pe:
+            return "Peace Sign"
+
+        # ── Pointing Up ───────────────────────────────────────────────
+        # Only index extended and pointing clearly upward
+        if ie and not me and not re and not pe:
+            il = _dist(index_tip, index_mcp)
+            ml = _dist(middle_tip, middle_mcp)
+            rl = _dist(ring_tip,   ring_mcp)
+            if il > ml + 0.03 and il > rl + 0.03:
+                v = index_tip.y - index_mcp.y
+                if v < -0.12:
+                    return "Pointing Up"
+
+        return "Unknown"
+
+    except Exception:
+        return "No hand"
 
 # =====================================================================
-# FACEAUTH CLASS
+# GESTURE CONTROLLER
 # =====================================================================
-class FaceAuth:
-    __slots__ = ('_db', '_state', '_unlocked', '_unlock_name', '_unlock_time',
-                 '_tracker', '_grace_count', '_tracked_id', '_match_buf',
-                 '_last_se', '_last_ie', '_last_cand', '_track_status',
-                 '_enroll_name', '_enroll_col', '_enroll_start', '_del_names',
-                 '_typed', '_mx', '_my', '_clicked', '_frame_counter')
+class GestureControl:
 
     def __init__(self):
-        self._db           = _load_db()
-        self._state        = _ST_RECOGNISE
-        self._unlocked     = False
-        self._unlock_name  = ""
-        self._unlock_time  = 0.0
-        self._tracker      = _CentroidTracker()
-        self._grace_count  = 0
-        self._tracked_id   = -1
-        self._match_buf    = deque(maxlen=config.FACE_CONFIRM_FRAMES)
-        self._last_se      = 999.0
-        self._last_ie      = 999.0
-        self._last_cand    = "—"
-        self._track_status = "SCANNING"
-        self._enroll_name  = ""
-        self._enroll_col   = []
-        self._enroll_start = 0.0
-        self._del_names    = []
-        self._typed        = ""
-        self._mx = 0; self._my = 0
-        self._clicked      = False
-        self._frame_counter = 0
+        self._state        = _GS_IDLE
+        self._active_device = None   # which device menu is open
+        self._hold_gesture  = None   # entry gesture being held
+        self._hold_start    = 0.0    # when hold started
+        self._action_gesture = None  # action gesture being held in menu
+        self._action_start   = 0.0   # when action hold started
+        self._menu_entry_time = 0.0  # when menu was entered (for entry delay + timeout)
+        self._buf           = deque(maxlen=7)
+        self.device_states  = dict(config.DEVICE_INITIAL_STATES)
 
-    def mouse_callback(self, event, x, y, flags, param):
-        self._mx, self._my = x, y
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self._clicked = True
+        # Pre-build valid entry gesture set for fast lookup
+        self._entry_gestures = set(config.ENTRY_GESTURES.keys())
+        print(f"[GESTURE] Entry gestures: {sorted(self._entry_gestures)}")
+        print(f"[GESTURE] Devices: {list(config.DEVICE_MENUS.keys())}")
 
-    def is_unlocked(self) -> bool:  return self._unlocked
-    def unlocked_name(self) -> str: return self._unlock_name
-    def enrolled_names(self) -> list: return list(self._db.keys())
-
-    def handle_key(self, key):
-        if self._state != _ST_RECOGNISE:
-            return
-        if key == ord('e'):
-            self._state = _ST_TYPING; self._typed = ""; self._clicked = False
-        elif key == ord('d'):
-            if self._db:
-                self._state = _ST_DELETE; self._del_names = list(self._db.keys())
-        elif key == ord('r'):
-            self._force_relock("Manual relock")
-
-    # =================================================================
-    # process_presence_only — ~3ms Haar, called every frame when UNLOCKED
-    # This is the sticky-ID path:
-    #   - Haar detects if any face is present (cheap)
-    #   - Tracker maintains the same ID as long as IOU matches
-    #   - grace_count increments when Haar finds nothing
-    #   - Relock fires after GRACE_FRAMES consecutive misses
-    #   - MediaPipe NEVER runs in this path → big FPS win
-    # =================================================================
-    def process_presence_only(self, frame):
+    # ── Main entry point ──────────────────────────────────────────────
+    def process_frame(self, frame, mqtt, face_unlocked):
         """
-        ~3ms Haar-only presence check for unlocked state.
-        Updates tracker + grace counter. Triggers relock if face gone.
-        MediaPipe is NOT called here — that's the whole point.
+        Returns (annotated_frame, feedback_or_None).
+        feedback = (message_str, color_tuple) or None
         """
-        box = _haar_box(frame)
-        return self._check_presence(frame, box)
-
-    def _check_presence(self, frame, box):
-        if box is not None:
-            track_id, _ = self._tracker.update(box)
-            self._grace_count  = 0
-            self._track_status = f"UNLOCKED id={track_id}"
-            x1, y1, x2, y2 = box
-            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,220,0), 3)
-            cv2.putText(frame, self._unlock_name,
-                        (x1, max(y1-10, 85)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,255,0), 2)
-        else:
-            self._tracker.lost()
-            self._grace_count += 1
-            self._track_status = f"LOST grace={self._grace_count}/{GRACE_FRAMES}"
-            if self._unlocked and self._grace_count >= GRACE_FRAMES:
-                self._force_relock("Face lost")
-        return frame
-
-    # =================================================================
-    # process_frame — full MediaPipe path (LOCKED state only)
-    # =================================================================
-    def process_frame(self, frame, key):
-        if self._state == _ST_TYPING:
-            return self._state_typing(frame, key)
-        if self._state == _ST_DELETE:
-            return self._state_delete(frame, key)
-
-        # UNLOCKED: use Haar only — do NOT run MediaPipe
-        if self._unlocked and self._state == _ST_RECOGNISE:
-            return self.process_presence_only(frame)
-
-        # LOCKED / ENROLLING: run full MediaPipe landmarker
-        rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = _landmarker.detect(
-            mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
-        lm  = _to_np(result)
-        box = _get_box(result, frame.shape)
-
-        if self._state == _ST_ENROLLING:
-            return self._state_enrolling(frame, result, lm, key)
-
-        return self._state_recognise(frame, result, lm, box, key)
-
-    def _state_recognise(self, frame, result, lm, box, key):
-        self._frame_counter += 1
-
-        # LOCKED branch — run recognition every N frames
-        process_this = (self._frame_counter %
-                        getattr(config, 'FACE_PROCESS_EVERY_N_FRAMES_LOCKED', 5) == 0)
-
-        if box is not None:
-            track_id, is_new = self._tracker.update(box)
-            self._grace_count = 0
-            H = frame.shape[0]
-            face_ok = False
-            if result and result.face_landmarks:
-                ys = [pt.y * H for pt in result.face_landmarks[0]]
-                face_ok = (max(ys)-min(ys)) / H >= config.FACE_MIN_HEIGHT_FRAC
-            if process_this and face_ok and lm is not None:
-                self._run_recognition(lm, frame.shape, track_id)
-            # Draw locked box
-            x1, y1, x2, y2 = box
-            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,60,220), 2)
-            label = self._last_cand if self._last_cand != "—" else "Scanning..."
-            cv2.putText(frame, label, (x1, max(y1-10, 85)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60,100,255), 2)
-        else:
-            self._tracker.lost()
-            self._grace_count += 1
-
-        # Red border when locked
-        cv2.rectangle(frame, (0,0),
-                      (frame.shape[1]-1, frame.shape[0]-1), (0,0,200), 4)
-
-        # Session timeout
-        if (self._unlocked and
-                (time.time()-self._unlock_time) > config.FACE_AUTH_TIMEOUT):
-            self._force_relock("Session timeout")
-
-        return frame
-
-    def _run_recognition(self, lm, shape, track_id):
+        # ── Run hand detection ────────────────────────────────────────
         try:
-            yaw, pitch = _head_pose(lm, shape)
+            rgb    = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            result = _landmarker.detect(
+                mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            lm = result.hand_landmarks[0] if result.hand_landmarks else None
         except Exception:
-            return
-        if abs(yaw) > 55 or abs(pitch) > 45:
-            return
-        lm_n              = _normalize(lm)
-        name, se, ie, match = _identify(lm_n, self._db)
-        self._last_se     = se
-        self._last_ie     = ie
-        self._last_cand   = name
-        self._match_buf.append(match)
-        if (match and
-                sum(self._match_buf) >= int(config.FACE_CONFIRM_FRAMES * 0.7)
-                and not self._unlocked):
-            self._unlocked    = True
-            self._unlock_name = name
-            self._unlock_time = time.time()
-            self._tracked_id  = track_id
-            self._grace_count = 0
-            print(f"[FACE] UNLOCKED — {name}  (sticky id={track_id})")
+            lm = None
 
-    def _force_relock(self, reason=""):
-        if reason:
-            print(f"[FACE] Re-locked: {reason}")
-        self._unlocked    = False
-        self._unlock_name = ""
-        self._tracked_id  = -1
-        self._grace_count = 0
-        self._match_buf.clear()
-        self._tracker.reset()
-        self._last_cand   = "—"
+        # Smooth gesture over buffer
+        self._buf.append(detect_gesture(lm))
+        detected = self._smooth()
 
-    # =================================================================
-    # TYPING / ENROLL / DELETE (unchanged from original)
-    # =================================================================
-    def _state_typing(self, frame, key):
-        combined = _draw_keyboard(frame, self._typed)
-        fh, fw   = frame.shape[:2]
-        if self._clicked:
-            self._typed, done, _ = _kb_hittest(fh, fw, self._mx, self._my, self._typed)
-            self._clicked = False
-            if done and self._typed.strip():
-                self._start_enroll(self._typed.strip())
-        if key == 27:   self._state = _ST_RECOGNISE
-        elif key in (13,10):
-            if self._typed.strip(): self._start_enroll(self._typed.strip())
-        elif key == 8:  self._typed = self._typed[:-1]
-        elif 32 <= key <= 122: self._typed += chr(key).upper()
-        return combined
-
-    def _start_enroll(self, name):
-        self._enroll_name  = name
-        self._enroll_col   = []
-        self._enroll_start = time.time()
-        self._state        = _ST_ENROLLING
-        print(f"[FACE] Enrolling: {name}")
-
-    def _state_enrolling(self, frame, result, lm, key):
-        name      = self._enroll_name
-        collected = self._enroll_col
-        TIMEOUT   = 50.0
-        remaining = TIMEOUT - (time.time() - self._enroll_start)
-        is_good   = False
-        status    = "No face detected"
-
+        # Draw hand skeleton
         if lm is not None:
-            try:
-                yaw, pitch = _head_pose(lm, frame.shape)
-                if abs(yaw) < 35 and abs(pitch) < 25:
-                    lm_n = _normalize(lm)
-                    collected.append(_stable(lm_n))
-                    status  = f"Good frame {len(collected)}/{config.FACE_ENROLL_TARGET}"
-                    is_good = True
-                    H, W = frame.shape[:2]
-                    for pt in result.face_landmarks[0]:
-                        cv2.circle(frame, (int(pt.x*W), int(pt.y*H)), 2, (0,255,0), -1)
-                else:
-                    status = f"Turn straight yaw={yaw:.0f} pitch={pitch:.0f}"
-                    H, W = frame.shape[:2]
-                    for pt in result.face_landmarks[0]:
-                        cv2.circle(frame, (int(pt.x*W), int(pt.y*H)), 2, (0,140,255), -1)
-            except Exception:
-                status = "Adjust position"
+            self._draw_skeleton(frame, lm, detected)
 
-        cv2.rectangle(frame, (0,0), (frame.shape[1],115), (0,55,150), -1)
-        cv2.putText(frame, f"ENROLLING: {name}",
-                    (20,42), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255,255,255), 2)
-        cv2.putText(frame, status, (20,82), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                    (0,255,100) if is_good else (0,150,255), 2)
-        prog = len(collected) / config.FACE_ENROLL_TARGET
-        bw   = frame.shape[1] - 40
-        cv2.rectangle(frame, (20,118), (20+bw,140), (50,50,50), -1)
-        cv2.rectangle(frame, (20,118), (20+int(bw*prog),140), (0,220,100), -1)
-        cv2.putText(frame,
-                    f"{int(prog*100)}%  30-50cm, look straight | {remaining:.0f}s left",
-                    (20,162), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,200,200), 1)
-        cv2.putText(frame, "ESC = cancel",
-                    (20,frame.shape[0]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (150,150,150), 1)
-        if key == 27:
-            print("[FACE] Enrollment cancelled.")
-            self._state = _ST_RECOGNISE
-        elif len(collected) >= config.FACE_ENROLL_TARGET or remaining <= 0:
-            self._finish_enroll(collected, name, frame)
-        return frame
+        # ── Blocked: face not authenticated ──────────────────────────
+        if not face_unlocked:
+            self._reset()
+            cv2.putText(frame, "FACE AUTH REQUIRED",
+                        (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.0, (0, 0, 220), 2)
+            self._draw_devices(frame)
+            return frame, None
 
-    def _finish_enroll(self, collected, name, frame):
-        if len(collected) >= 10:
-            avg = np.mean(collected, axis=0).astype(np.float32)
-            self._db[name] = {'stable': avg, 'frames': len(collected)}
-            _save_db(self._db)
-            photo = os.path.join(config.ENROLL_PHOTOS_DIR, f"{name}.jpg")
-            cv2.imwrite(photo, frame)
-            print(f"[FACE] '{name}' enrolled ({len(collected)} frames).")
+        # ── Route by state ────────────────────────────────────────────
+        feedback = None
+        if self._state == _GS_IDLE:
+            self._do_idle(frame, detected)
+        elif self._state == _GS_HOLDING:
+            self._do_holding(frame, detected)
+        elif self._state == _GS_MENU:
+            feedback = self._do_menu(frame, detected, mqtt)
+
+        self._draw_devices(frame)
+        return frame, feedback
+
+    # ── IDLE: watch for entry gesture ─────────────────────────────────
+    def _do_idle(self, frame, detected):
+        if detected in self._entry_gestures:
+            # Start tracking this as a candidate hold
+            if self._hold_gesture != detected:
+                self._hold_gesture = detected
+                self._hold_start   = time.time()
+
+            elapsed   = time.time() - self._hold_start
+            remaining = max(0.0, config.GESTURE_HOLD_TIME - elapsed)
+            device    = config.ENTRY_GESTURES[detected]
+            dev_label = config.DEVICE_DISPLAY.get(device, device.upper())
+
+            # HUD
+            cv2.putText(frame, f"{detected}",
+                        (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+            cv2.putText(frame, f"Hold to open {dev_label} menu... {remaining:.1f}s",
+                        (20, 194), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 220, 80), 2)
+
+            # Progress bar
+            bw = frame.shape[1] - 40
+            cv2.rectangle(frame, (20, 206), (20 + bw, 220), (60, 60, 60), -1)
+            prog = min(elapsed / config.GESTURE_HOLD_TIME, 1.0)
+            cv2.rectangle(frame, (20, 206), (20 + int(bw * prog), 220), (0, 200, 255), -1)
+
+            if elapsed >= config.GESTURE_HOLD_TIME:
+                # Enter device menu
+                self._active_device   = device
+                self._state           = _GS_MENU
+                self._menu_entry_time = time.time()
+                self._action_gesture  = None
+                self._action_start    = 0.0
+                self._hold_gesture    = None
+                self._hold_start      = 0.0
+                print(f"[GESTURE] Entered menu: {dev_label}")
         else:
-            print(f"[FACE] Enroll failed — only {len(collected)} frames.")
-        self._state = _ST_RECOGNISE
-        self._force_relock()
+            # Not a valid entry gesture — reset hold
+            if self._hold_gesture is not None:
+                self._hold_gesture = None
+                self._hold_start   = 0.0
+            # Show minimal hint
+            if detected not in ("No hand", "Unknown"):
+                cv2.putText(frame, f"{detected}",
+                            (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 100, 100), 1)
 
-    def _state_delete(self, frame, key):
-        panel = np.full_like(frame, 25)
-        cv2.putText(panel, "DELETE WHICH FACE?",
-                    (20,55), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,100,255), 2)
-        cv2.putText(panel, "Press number key | ESC = cancel",
-                    (20,95), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150,150,150), 1)
-        for i, nm in enumerate(self._del_names[:5]):
-            cv2.putText(panel, f"  {i+1}. {nm}",
-                        (20,145+i*45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255,170,0), 2)
-        if key == 27:
-            self._state = _ST_RECOGNISE
-        elif ord('1') <= key <= ord('9'):
-            idx = key - ord('1')
-            if idx < len(self._del_names):
-                nm = self._del_names[idx]
-                del self._db[nm]
-                _save_db(self._db)
-                print(f"[FACE] Deleted: {nm}")
-            self._state = _ST_RECOGNISE
-            self._force_relock()
-        return panel
+    # ── HOLDING state is merged into IDLE above (simpler) ─────────────
+    def _do_holding(self, frame, detected):
+        # Legacy — redirected into _do_idle
+        self._do_idle(frame, detected)
 
-    # =================================================================
-    # HUD DRAWING
-    # =================================================================
-    def draw_status_bar(self, frame):
-        cv2.rectangle(frame, (0,0), (frame.shape[1],68),
-                      (0,100,0) if self._unlocked else (0,0,120), -1)
-        if self._unlocked:
-            rem = max(0.0, config.FACE_AUTH_TIMEOUT-(time.time()-self._unlock_time))
-            cv2.putText(frame, f"UNLOCKED [{self._unlock_name}]",
-                        (12,42), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,80), 2)
-            cv2.putText(frame, f"Session: {int(rem)}s",
-                        (frame.shape[1]-160,42),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (160,255,160), 1)
-            if self._grace_count > 0:
-                cv2.putText(frame, f"GRACE {self._grace_count}/{GRACE_FRAMES}",
-                            (12,62), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,200,255), 1)
+    # ── MENU: inside a device menu ────────────────────────────────────
+    def _do_menu(self, frame, detected, mqtt):
+        device    = self._active_device
+        dev_label = config.DEVICE_DISPLAY.get(device, device.upper())
+        hint      = config.DEVICE_ACTION_HINTS.get(device, "")
+        actions   = config.DEVICE_MENUS.get(device, {})
+        now       = time.time()
+
+        # ── Timeout check ────────────────────────────────────────────
+        if now - self._menu_entry_time > config.MENU_TIMEOUT:
+            self._reset()
+            return ("Menu timeout — cancelled", (80, 80, 80))
+
+        time_left = config.MENU_TIMEOUT - (now - self._menu_entry_time)
+
+        # ── Yellow border = menu active ───────────────────────────────
+        cv2.rectangle(frame, (0, 0),
+                      (frame.shape[1]-1, frame.shape[0]-1), (0, 200, 255), 5)
+
+        # ── Menu header ───────────────────────────────────────────────
+        cv2.putText(frame, f"{dev_label} MENU",
+                    (20, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 255), 2)
+        cv2.putText(frame, hint,
+                    (20, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (200, 200, 200), 1)
+        cv2.putText(frame, f"Auto-cancel in {time_left:.0f}s",
+                    (20, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (130, 130, 130), 1)
+
+        # ── Entry delay — stabilise after transition ──────────────────
+        since_entry = now - self._menu_entry_time
+        if since_entry < config.MENU_ENTRY_DELAY:
+            rem = config.MENU_ENTRY_DELAY - since_entry
+            cv2.putText(frame, f"Stabilising... {rem:.1f}s",
+                        (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (160, 160, 160), 1)
+            self._action_gesture = None
+            self._action_start   = 0.0
+            return None
+
+        # ── Open Palm = universal cancel ──────────────────────────────
+        if detected == "Open Palm":
+            self._reset()
+            return ("Cancelled", (80, 80, 200))
+
+        # ── Check for action gesture ──────────────────────────────────
+        if detected in actions:
+            if self._action_gesture != detected:
+                self._action_gesture = detected
+                self._action_start   = now
+
+            held      = now - self._action_start
+            remaining = max(0.0, config.ACTION_HOLD_TIME - held)
+            _, _, lbl = actions[detected]
+            bar_color = (0, 220, 0) if detected == "Thumb Up" else (0, 80, 220)
+
+            cv2.putText(frame, f"{detected}  →  {lbl}",
+                        (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 80), 2)
+            cv2.putText(frame, f"Hold {remaining:.1f}s to confirm",
+                        (20, 234), cv2.FONT_HERSHEY_SIMPLEX, 0.72, bar_color, 2)
+
+            # Action progress bar
+            bw = frame.shape[1] - 40
+            cv2.rectangle(frame, (20, 246), (20 + bw, 260), (60, 60, 60), -1)
+            prog = min(held / config.ACTION_HOLD_TIME, 1.0)
+            cv2.rectangle(frame, (20, 246), (20 + int(bw * prog), 260), bar_color, -1)
+
+            if held >= config.ACTION_HOLD_TIME:
+                mqtt_device, mqtt_action, lbl = actions[detected]
+                mqtt.publish(mqtt_device, mqtt_action)
+                self._update_device(mqtt_device, mqtt_action)
+                feedback = (f"{lbl} ACTIVATED!", (0, 255, 0))
+                self._reset()
+                return feedback
+
         else:
-            if not self._db:
-                msg = "NO FACES — press 'e'"
-            elif self._tracker.box is None:
-                msg = "LOCKED — No face"
+            # Not a valid action for this device — reset action hold
+            if self._action_gesture is not None:
+                self._action_gesture = None
+                self._action_start   = 0.0
+            if detected not in ("No hand", "Unknown"):
+                cv2.putText(frame, f"{detected} — not valid here",
+                            (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (120, 120, 120), 1)
             else:
-                prog = sum(self._match_buf) / max(config.FACE_CONFIRM_FRAMES, 1)
-                msg  = f"LOCKED — {int(prog*100)}%"
-            cv2.putText(frame, msg, (12,42),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80,140,255), 2)
-        return frame
+                cv2.putText(frame, "Show action gesture...",
+                            (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (160, 160, 160), 1)
 
-    def draw_debug(self, frame):
+        return None
+
+    # ── Gesture smoothing: majority vote ──────────────────────────────
+    def _smooth(self):
+        if not self._buf:
+            return "No hand"
+        counts = {}
+        for g in self._buf:
+            counts[g] = counts.get(g, 0) + 1
+        best = max(counts, key=counts.get)
+        if counts[best] >= len(self._buf) // 2 + 1:
+            return best
+        return "Unknown"
+
+    # ── Draw hand skeleton ────────────────────────────────────────────
+    def _draw_skeleton(self, frame, lm, detected):
         H, W = frame.shape[:2]
-        mc   = lambda v, t: (0,220,0) if v < t else (0,80,220)
-        lines = [
-            (f"S:{self._last_se:.3f}/{config.FACE_SHAPE_THRESHOLD}",
-             mc(self._last_se, config.FACE_SHAPE_THRESHOLD)),
-            (f"C:{self._last_ie:.3f}/{config.FACE_IDENTITY_THRESHOLD}",
-             mc(self._last_ie, config.FACE_IDENTITY_THRESHOLD)),
-            (f"{self._track_status[:20]}", (180,180,180)),
-        ]
-        panel_w = 185; panel_h = len(lines)*15+6
-        x0 = W-panel_w-4; y0 = 72
+        in_menu = self._state == _GS_MENU
+        # Green in menu, cyan when valid entry, grey otherwise
+        if in_menu and detected in config.DEVICE_MENUS.get(self._active_device, {}):
+            color = (0, 255, 0)
+        elif detected in self._entry_gestures:
+            color = (0, 255, 255)
+        else:
+            color = (90, 90, 90)
+        for pt in lm:
+            cx = int(max(0, min(pt.x * W, W - 1)))
+            cy = int(max(0, min(pt.y * H, H - 1)))
+            cv2.circle(frame, (cx, cy), 3, color, -1)
+
+    # ── Device state update ───────────────────────────────────────────
+    def _update_device(self, device, action):
+        if action == "toggle":
+            cur = self.device_states.get(device, 0)
+            self.device_states[device] = 0 if cur else 1
+        elif isinstance(self.device_states.get(device), str):
+            # String state (window: stopped/roll_up/roll_down)
+            self.device_states[device] = action
+        else:
+            self.device_states[device] = 1 if action in ("on", "roll_up") else 0
+
+    # ── Device status panel ───────────────────────────────────────────
+    def _draw_devices(self, frame):
+        H, W = frame.shape[:2]
+        items = list(self.device_states.items())
+        n     = len(items)
+        lh    = 20
+        pw    = 155
+        ph    = n * lh + 8
+        x0    = W - pw - 4
+        y0    = H - ph - 4
+
         overlay = frame.copy()
-        cv2.rectangle(overlay, (x0,y0), (W-2,y0+panel_h), (15,15,15), -1)
-        cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
-        for i, (text, color) in enumerate(lines):
-            cv2.putText(frame, text, (x0+5, y0+12+i*15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-        return frame
+        cv2.rectangle(overlay, (x0, y0), (W - 2, H - 2), (15, 15, 15), -1)
+        cv2.addWeighted(overlay, 0.50, frame, 0.50, 0, frame)
+
+        # Highlight active menu device
+        y = y0 + lh
+        for dev, state in items:
+            is_active = (self._state == _GS_MENU and dev == self._active_device)
+            if isinstance(state, str):
+                label = state.upper()
+                color = (0, 200, 0) if state not in ("stopped", "off", "close", "roll_down") \
+                        else (80, 80, 80)
+            else:
+                label = "ON" if state else "OFF"
+                color = (0, 210, 0) if state else (80, 80, 80)
+
+            if is_active:
+                color = (0, 220, 255)   # cyan = currently in menu
+
+            cv2.putText(frame, f"{dev.capitalize()}: {label}",
+                        (x0 + 5, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
+            y += lh
+
+    # ── Full reset ────────────────────────────────────────────────────
+    def _reset(self):
+        self._state          = _GS_IDLE
+        self._active_device  = None
+        self._hold_gesture   = None
+        self._hold_start     = 0.0
+        self._action_gesture = None
+        self._action_start   = 0.0
+        self._menu_entry_time = 0.0
+        self._buf.clear()
+
+    # ── FPS display ───────────────────────────────────────────────────
+    def draw_fps(self, frame, fps):
+        cv2.putText(frame, f"FPS: {fps:.1f}",
+                    (frame.shape[1] - 115, frame.shape[0] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (180, 180, 180), 1)
