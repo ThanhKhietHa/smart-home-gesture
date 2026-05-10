@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Diagnose where the FPS bottleneck really is"""
 #python3 test.py
+#v4l2-ctl --list-formats-ext
 import cv2
 import time
 import mediapipe as mp
