@@ -2,6 +2,13 @@
 """Diagnose where the FPS bottleneck really is"""
 #python3 test.py
 #v4l2-ctl --list-formats-ext
+#v4l2-ctl --device=/dev/video0 --get-fmt-video
+#v4l2-ctl --device=/dev/video0 --set-fmt-video=width=1280,height=702,pixelformat=MJPG
+##!/bin/bash
+#v4l2-ctl --device=/dev/video0 --set-fmt-video=width=1280,height=702,pixelformat=MJPG
+#python3 main.py
+#fuser /dev/video0
+#sudo kill -9 <PID>
 import cv2
 import time
 import mediapipe as mp
