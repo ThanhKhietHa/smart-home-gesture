@@ -37,7 +37,7 @@ from mqtt_handler    import MQTTHandler
 # How often face presence check runs when unlocked (every N face-thread ticks)
 # Higher = more CPU for gesture, lower = faster relock detection
 # At 10 FPS camera: 5 = check every 0.5s, fine for 2s grace period
-PRESENCE_EVERY = 10
+PRESENCE_EVERY = 5
 
 
 # =====================================================================
@@ -305,11 +305,8 @@ def main():
     t_gesture.start()
     print("[MAIN] Threads started\n")
 
-    # FPS tracking for terminal output (every 3 seconds)
     fps = 0.0
     fps_prev = time.time()
-    fps_counter = 0
-    last_fps_print = time.time()
 
     while cap.isOpened():
         ret, raw = cap.read()
@@ -345,18 +342,8 @@ def main():
             cv2.putText(display, msg, (20, H // 2 + 12),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.1, color, 3)
 
-        now = time.time()
-        # Update FPS counter
-        fps_counter += 1
-        # Calculate FPS every 3 seconds and print to terminal
-        if now - last_fps_print >= 3.0:
-            terminal_fps = fps_counter / (now - last_fps_print)
-            print(f"[FPS] Display: {terminal_fps:.1f} fps (camera source: {actual_fps:.0f} requested)")
-            fps_counter = 0
-            last_fps_print = now
-        
-        # Exponential moving average for on-screen display
-        fps = 0.9 * fps + 0.1 / (now - fps_prev + 1e-6)
+        now  = time.time()
+        fps  = 0.9 * fps + 0.1 / (now - fps_prev + 1e-6)
         fps_prev = now
         gesture.draw_fps(display, fps)
 
