@@ -1,8 +1,3 @@
-"""
-gesture_control.py — Hand Gesture Recognition & Device Control
-Optimized - NO landmark drawing for better FPS
-"""
-
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -13,9 +8,6 @@ import numpy as np
 from collections import deque
 import config
 
-# =====================================================================
-# MEDIAPIPE — OPTIMIZED: lower complexity, single hand
-# =====================================================================
 _hand_options = vision.HandLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
@@ -28,20 +20,14 @@ _landmarker = vision.HandLandmarker.create_from_options(_hand_options)
 _GS_IDLE    = "IDLE"
 _GS_CONFIRM = "CONFIRM"
 
-# =====================================================================
 # Valid gestures for quick lookup
-# =====================================================================
 _VALID_GESTURES = set(config.GESTURE_COMMANDS.keys())
 
-# =====================================================================
 # GEOMETRY
-# =====================================================================
 def _dist(p1, p2):
     return math.sqrt((p1.x-p2.x)**2 + (p1.y-p2.y)**2 + (p1.z-p2.z)**2)
 
-# =====================================================================
 # GESTURE DETECTION — Simplified for speed
-# =====================================================================
 def detect_gesture(lm):
     """
     Returns gesture name string.
@@ -212,14 +198,16 @@ class GestureControl:
     # ── CONFIRM state ─────────────────────────────────────────────────
     def _do_confirm(self, frame, detected, mqtt):
         dev, act = config.GESTURE_COMMANDS.get(self._cur_gesture, ("?","?"))
+        has_onoff = config.DEVICE_HAS_ONOFF.get(dev, False)
 
         cv2.rectangle(frame, (0,0),
                       (frame.shape[1]-1, frame.shape[0]-1), (0,200,255), 5)
         cv2.putText(frame, "CONFIRM ACTION?",
                     (20,155), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0,255,255), 2)
-        cv2.putText(frame, f"{self._cur_gesture}  ->  {dev}",
+        cv2.putText(frame, f"{self._cur_gesture}  ->  {dev.upper()}",
                     (20,192), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255,255,0), 2)
-        cv2.putText(frame, "Thumb UP = ON    Thumb DOWN = OFF    No hand = cancel",
+        hint = "Thumb UP=ON  Thumb DOWN=OFF  No hand=cancel" if has_onoff else "Thumb UP=TOGGLE  No hand=cancel"
+        cv2.putText(frame, hint,
                     (20,226), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200,200,200), 1)
 
         since = time.time() - self._conf_entry
@@ -254,7 +242,8 @@ class GestureControl:
         else:
             self._no_hand_start = 0.0
 
-        if detected in ("Thumb Up", "Thumb Down"):
+        valid_confirm = ("Thumb Up", "Thumb Down") if has_onoff else ("Thumb Up",)
+        if detected in valid_confirm:
             if self._conf_gesture != detected:
                 self._conf_gesture = detected
                 self._conf_start   = time.time()
@@ -273,7 +262,7 @@ class GestureControl:
                 bc, -1)
 
             if held >= config.CONFIRM_HOLD_TIME:
-                final_action = "on" if is_up else "off"
+                final_action = ("on" if is_up else "off") if has_onoff else "toggle"
                 mqtt.publish(dev, final_action)
                 self._update_device(dev, final_action)
                 feedback = (f"{dev.upper()} {final_action.upper()} ACTIVATED!",
