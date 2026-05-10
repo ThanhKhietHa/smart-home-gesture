@@ -1,4 +1,6 @@
-
+"""
+config.py — Central configuration for Smart Home Gesture Control
+"""
 
 import os
 
@@ -17,18 +19,28 @@ ENROLL_PHOTOS_DIR = os.path.join(DATA_DIR,   'enroll_photos')
 os.makedirs(DATA_DIR,          exist_ok=True)
 os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 
+# =====================================================================
+# CAMERA — OPTIMIZED for Jetson Orin Nano
+# =====================================================================
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640  # explicitly listed in camera MJPG modes
-CAMERA_HEIGHT = 320  # native resolution avoids YUYV fallback
+# LOWER RESOLUTION for better FPS (was 640x360)
+CAMERA_WIDTH  = 320   # Reduced from 640
+CAMERA_HEIGHT = 180   # Reduced from 360
 CAMERA_FPS    = 30
 
-FACE_PROCESS_EVERY_N_FRAMES_LOCKED    = 2
-
-FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED  = 90
+# =====================================================================
+# PERFORMANCE OPTIMIZATIONS
+# =====================================================================
+FACE_PROCESS_EVERY_N_FRAMES_LOCKED = 2
+FACE_PROCESS_EVERY_N_FRAMES_UNLOCKED = 90
+GESTURE_PROCESS_EVERY_N_FRAMES = 2
 
 FACE_DETECTION_CONFIDENCE = 0.35
-FACE_PRESENCE_CONFIDENCE  = 0.35
+FACE_PRESENCE_CONFIDENCE = 0.35
 
+# =====================================================================
+# MQTT — Shiftr.io cloud broker
+# =====================================================================
 MQTT_BROKER          = "khiet1111.cloud.shiftr.io"
 MQTT_PORT            = 1883
 MQTT_TOPIC_BASE      = "/smart_home/"
@@ -36,6 +48,9 @@ MQTT_USER            = "khiet1111"
 MQTT_PASSWORD        = "khiet"
 MQTT_RECONNECT_DELAY = 3.0
 
+# =====================================================================
+# FACE RECOGNITION
+# =====================================================================
 FACE_SHAPE_THRESHOLD    = 0.10
 FACE_IDENTITY_THRESHOLD = 0.008
 
@@ -45,60 +60,29 @@ FACE_ENROLL_TARGET   = 40
 FACE_AUTH_TIMEOUT    = 300.0
 FACE_MIN_HEIGHT_FRAC = 0.20
 
+# =====================================================================
+# GESTURE RECOGNITION
+# =====================================================================
 HAND_DETECTION_CONFIDENCE = 0.5
 HAND_TRACKING_CONFIDENCE  = 0.4
 
-GESTURE_HOLD_TIME   = 1.5
+GESTURE_HOLD_TIME    = 1.5
+CONFIRM_HOLD_TIME    = 0.6
+CONFIRM_ENTRY_DELAY  = 0.6
 
-ACTION_HOLD_TIME    = 0.8
-
-MENU_ENTRY_DELAY    = 0.5
-
-MENU_TIMEOUT        = 3.0
-
-ENTRY_GESTURES = {
-    "Open Palm":   "lights",
-    "Peace Sign":  "door",
-    "Pointing Up": "ac",
-    "Thumb Up":    "window",   
-}
-
-DEVICE_MENUS = {
-    "lights": {
-        "Thumb Up":   ("lights", "on",  "Lights ON"),
-        "Thumb Down": ("lights", "off", "Lights OFF"),
-    },
-    "door": {
-        "Thumb Up":   ("door", "toggle", "Door TOGGLE"),
-    },
-    "ac": {
-        "Thumb Up":   ("ac", "on",  "AC ON"),
-        "Thumb Down": ("ac", "off", "AC OFF"),
-    },
-    "window": {
-        "Thumb Up":   ("window", "roll_up",   "Window UP"),
-        "Thumb Down": ("window", "roll_down", "Window DOWN"),
-    },
-}
-
-# Menu display names and entry hint text
-DEVICE_DISPLAY = {
-    "lights": "LIGHTS",
-    "door":   "DOOR",
-    "ac":     "AC",
-    "window": "WINDOW",
-}
-
-DEVICE_ACTION_HINTS = {
-    "lights": "Thumb UP = ON   |   Thumb DOWN = OFF",
-    "door":   "Thumb UP = Toggle",
-    "ac":     "Thumb UP = ON   |   Thumb DOWN = OFF",
-    "window": "Thumb UP = Roll Up  |  Thumb DOWN = Roll Down",
+# =====================================================================
+# DEVICE → GESTURE MAPPING (4 active gestures)
+# =====================================================================
+GESTURE_COMMANDS = {
+    "Open Palm":     ("lights",   "toggle"),
+    "Peace Sign":    ("door",     "toggle"),
+    "Pointing Up":   ("ac",       "toggle"),
+    "Thumb Up":      ("window",   "toggle"),
 }
 
 DEVICE_INITIAL_STATES = {
-    "lights": 0,
-    "door":   0,
-    "ac":     0,
-    "window": "stopped",
+    "lights":   0,
+    "door":     0,
+    "ac":       0,
+    "window":   0,
 }
