@@ -237,15 +237,36 @@ def main():
     buf     = FrameBuffer()
     state   = SharedState()
 
-    cap = cv2.VideoCapture(config.CAMERA_INDEX)
+    # Camera init — MJPG mode MUST be set before resolution/FPS
+    # Default OpenCV picks YUYV which saturates USB 2.0 at ~10 FPS.
+    # MJPEG compresses in-camera; USB carries ~3x less data = 30 FPS possible.
+    # Critical order: open -> FOURCC -> resolution -> FPS -> buffersize
+    cap = cv2.VideoCapture(config.CAMERA_INDEX, cv2.CAP_V4L2)
     if not cap.isOpened():
-        print("[ERROR] Cannot open camera.")
+        print("[ERROR] Cannot open camera. Check CAMERA_INDEX in config.py")
         return
 
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    fourcc = cv2.VideoWriter_fourcc("M", "J", "P", "G")
+    cap.set(cv2.CAP_PROP_FOURCC,       fourcc)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  config.CAMERA_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS,          config.CAMERA_FPS)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+
+    # Verify MJPG actually applied
+    actual_fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+    fourcc_str    = "".join([chr((actual_fourcc >> 8 * i) & 0xFF) for i in range(4)])
+    actual_fps    = cap.get(cv2.CAP_PROP_FPS)
+    actual_w      = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    actual_h      = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    mjpg_ok       = fourcc_str.strip() == "MJPG"
+    fps_ok        = actual_fps >= 25
+
+    print(f"[CAM] Format: {fourcc_str}  ({'OK compressed' if mjpg_ok else 'WARN not MJPG, bandwidth-limited'})" )
+    print(f"[CAM] FPS   : {actual_fps:.0f}  ({'OK' if fps_ok else 'WARN still slow'})")
+    print(f"[CAM] Size  : {actual_w}x{actual_h}")
+    if not mjpg_ok:
+        print("[CAM] MJPG rejected — run: v4l2-ctl --list-formats-ext")
 
     print("[MAIN] Camera warming up...")
     for _ in range(10):
