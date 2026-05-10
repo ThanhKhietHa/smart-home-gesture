@@ -91,7 +91,7 @@ ACTION_HOLD_TIME    = 0.8
 #   (prevents accidental immediate confirm from entry gesture motion)
 MENU_ENTRY_DELAY    = 0.5
 # How long menu stays open with no valid gesture before auto-cancel
-MENU_TIMEOUT        = 8.0
+MENU_TIMEOUT        = 3.0
 
 # =====================================================================
 # DEVICE MENU DEFINITIONS
@@ -99,7 +99,6 @@ MENU_TIMEOUT        = 8.0
 #   ENTRY_GESTURES: gesture → device label shown in menu
 #   DEVICE_MENUS:   device  → { action_gesture: (mqtt_device, mqtt_action, display_label) }
 #
-# Open Palm is the universal cancel — handled in code, not listed here.
 # =====================================================================
 
 # Level 1 — which gesture opens which device menu
@@ -138,10 +137,10 @@ DEVICE_DISPLAY = {
 }
 
 DEVICE_ACTION_HINTS = {
-    "lights": "Thumb UP = ON   |   Thumb DOWN = OFF   |   Open Palm = Cancel",
-    "door":   "Thumb UP = Toggle   |   Open Palm = Cancel",
-    "ac":     "Thumb UP = ON   |   Thumb DOWN = OFF   |   Open Palm = Cancel",
-    "window": "Thumb UP = Roll Up  |  Thumb DOWN = Roll Down  |  Open Palm = Cancel",
+    "lights": "Thumb UP = ON   |   Thumb DOWN = OFF",
+    "door":   "Thumb UP = Toggle",
+    "ac":     "Thumb UP = ON   |   Thumb DOWN = OFF",
+    "window": "Thumb UP = Roll Up  |  Thumb DOWN = Roll Down",
 }
 
 # =====================================================================
