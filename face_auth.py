@@ -18,25 +18,8 @@ import config
 # =====================================================================
 # TUNABLE TRACKER CONSTANTS
 # =====================================================================
-GRACE_FRAMES    = 20        # was 2 (~200ms) — now 20 frames (~2s at 10fps)
+GRACE_FRAMES    = 20   # was 2 (~200ms) — 20 frames ≈ 2s grace before relock
 IOU_THRESHOLD   = 0.30
-
-# =====================================================================
-# HAAR CASCADE — lightweight presence (~3ms, unlocked state only)
-# MediaPipe landmarker is NOT called when unlocked — big FPS gain.
-# =====================================================================
-_haar = cv2.CascadeClassifier(
-    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-
-def _haar_box(frame):
-    """Returns (x1,y1,x2,y2) or None. ~3ms. Loose so head-turns don't relock."""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    hits = _haar.detectMultiScale(gray, scaleFactor=1.2,
-                                  minNeighbors=2, minSize=(60, 60))
-    if len(hits) == 0:
-        return None
-    x, y, w, h = hits[0]
-    return (x, y, x + w, y + h)
 
 # =====================================================================
 # MEDIAPIPE - OPTIMIZED
@@ -384,13 +367,6 @@ class FaceAuth:
         if self._state == _ST_DELETE:
             return self._state_delete(frame, key)
 
-        # UNLOCKED: Haar only (~3ms) — MediaPipe never runs here.
-        # Sticky ID tracker + grace counter updated via check_presence.
-        if self._unlocked and self._state == _ST_RECOGNISE:
-            box = _haar_box(frame)
-            return self.check_presence(frame, box)
-
-        # LOCKED / ENROLLING: run full MediaPipe landmarker (~30ms)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = _landmarker.detect(
             mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
