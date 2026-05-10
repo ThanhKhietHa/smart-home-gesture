@@ -1,13 +1,3 @@
-"""
-gesture_control.py — Hand Gesture Recognition & Device Control
-==============================================================
-2-Level Menu System:
-  Level 1 (IDLE):    Hold entry gesture 1.5s → enter device menu
-  Level 2 (IN_MENU): Show action options for that device
-                     Thumb Up / Thumb Down = action (hold 0.8s)
-                     Open Palm             = cancel (always)
-  Timeout: menu auto-cancels after MENU_TIMEOUT seconds
-"""
 
 import cv2
 import mediapipe as mp
@@ -18,9 +8,6 @@ import time
 from collections import deque
 import config
 
-# =====================================================================
-# MEDIAPIPE
-# =====================================================================
 _hand_options = vision.HandLandmarkerOptions(
     base_options=python.BaseOptions(model_asset_path=config.HAND_MODEL_PATH),
     running_mode=vision.RunningMode.IMAGE,
@@ -31,15 +18,8 @@ _hand_options = vision.HandLandmarkerOptions(
 
 _landmarker = vision.HandLandmarker.create_from_options(_hand_options)
 
-# =====================================================================
-# STATES
-# =====================================================================
 _GS_IDLE = "IDLE"
 _GS_MENU = "MENU"
-
-# =====================================================================
-# HELPERS
-# =====================================================================
 def _dist(p1, p2):
     return math.sqrt(
         (p1.x - p2.x) ** 2 +
@@ -47,9 +27,7 @@ def _dist(p1, p2):
         (p1.z - p2.z) ** 2
     )
 
-# =====================================================================
-# GESTURE DETECTION
-# =====================================================================
+
 def detect_gesture(lm):
     try:
         if not lm or len(lm) < 21:
@@ -119,9 +97,6 @@ def detect_gesture(lm):
     except Exception:
         return "No hand"
 
-# =====================================================================
-# GESTURE CONTROL
-# =====================================================================
 class GestureControl:
 
     def __init__(self):
@@ -144,9 +119,6 @@ class GestureControl:
 
         self._entry_gestures = set(config.ENTRY_GESTURES.keys())
 
-    # =================================================================
-    # MAIN
-    # =================================================================
     def process_frame(self, frame, mqtt, face_unlocked):
 
         try:
@@ -199,9 +171,6 @@ class GestureControl:
 
         return frame, feedback
 
-    # =================================================================
-    # IDLE
-    # =================================================================
     def _do_idle(self, frame, detected):
 
         if detected in self._entry_gestures:
