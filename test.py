@@ -3,7 +3,7 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 import mediapipe as mp, numpy as np, time, os
-
+# python3 test.py
 model = "models/hand_landmarker.task"   # adjust path if needed
 for name, delegate in [("CPU", BaseOptions.Delegate.CPU), ("GPU", BaseOptions.Delegate.GPU)]:
     try:
