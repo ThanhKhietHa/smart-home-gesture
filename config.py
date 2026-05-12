@@ -1,17 +1,3 @@
-"""
-config.py — Central configuration for Smart Home Gesture Control
-
-MQTT topic alignment with ESP8266:
-  ESP subscribes to:
-    /smart_home/lights/on   /smart_home/lights/off
-    /smart_home/ac/on       /smart_home/ac/off
-    /smart_home/door/toggle
-    /smart_home/window/on   /smart_home/window/off  (on=up, off=down)
-
-  Python publishes via: mqtt.publish(device, action)
-  → topic = MQTT_TOPIC_BASE + device + "/" + action
-  → e.g.  /smart_home/lights/on
-"""
 
 import os
 
@@ -28,7 +14,7 @@ os.makedirs(DATA_DIR,          exist_ok=True)
 os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640    # 320x180 is too small for face recognition
+CAMERA_WIDTH  = 640   
 CAMERA_HEIGHT = 360
 CAMERA_FPS    = 30
 
