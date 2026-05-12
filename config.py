@@ -14,7 +14,7 @@ os.makedirs(DATA_DIR,          exist_ok=True)
 os.makedirs(ENROLL_PHOTOS_DIR, exist_ok=True)
 
 CAMERA_INDEX  = 0
-CAMERA_WIDTH  = 640   
+CAMERA_WIDTH  = 640  
 CAMERA_HEIGHT = 360
 CAMERA_FPS    = 30
 
@@ -47,15 +47,18 @@ GESTURE_HOLD_TIME    = 1.5
 CONFIRM_HOLD_TIME    = 0.6
 CONFIRM_ENTRY_DELAY  = 0.6
 
-=
-GESTURE_COMMANDS = {
 
+GESTURE_COMMANDS = {
+    # gesture       device     action shown in confirm screen
+    # Thumb Up/Down in confirm screen maps to on/off/toggle below:
     "Open Palm":  ("lights", "on"),    # confirm: Thumb Up=on, Thumb Down=off
     "Peace Sign": ("door",   "toggle"),# confirm: Thumb Up only (toggle)
     "Pointing Up":("ac",     "on"),    # confirm: Thumb Up=on, Thumb Down=off
     "Thumb Up":   ("window", "on"),    # confirm: Thumb Up=up(on), Thumb Down=down(off)
 }
 
+# Which devices support on/off vs toggle-only
+# Used by gesture_control confirm screen to show correct options
 DEVICE_HAS_ONOFF = {
     "lights": True,    # Thumb Up=on, Thumb Down=off
     "ac":     True,    # Thumb Up=on, Thumb Down=off
