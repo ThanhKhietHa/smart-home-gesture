@@ -5,3 +5,7 @@ sudo apt install -y python3-pip python3-dev python3-numpy libopencv-dev python3-
 pip3 install --break-system-packages mediapipe opencv-python paho-mqtt numpy
 
 python3 -c "import cv2, mediapipe, paho.mqtt.client, numpy; print('All OK')"
+
+v4l2-ctl --set-ctrl=auto_exposure=1
+v4l2-ctl --set-ctrl=exposure_time_absolute=150
+v4l2-ctl --set-ctrl=white_balance_automatic=0
