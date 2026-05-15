@@ -1,16 +1,4 @@
-"""
-face_auth.py — Face Recognition + Centroid Tracker
-===================================================
-Changes:
-  - On-screen keyboard REMOVED. Name typed via cv2 window key events.
-  - handle_key() called BEFORE process_frame() every loop iteration.
-  - process_frame() no longer accepts key param.
-  - GRACE_FRAMES = 20 (~2 s at 10 FPS).
-  - process_presence_only() for lightweight skip-frame presence check.
-  - _state_recognise() draws animated scan progress bar every frame
-    (smooth lerp) so HUD never looks frozen during re-scan.
-  - _force_relock() resets tracker.box so status bar shows no-face immediately.
-"""
+
 
 import cv2
 import mediapipe as mp
@@ -143,9 +131,6 @@ class FaceAuth:
     def unlocked_name(self): return self._unlock_name
     def enrolled_names(self): return list(self._db.keys())
 
-    # ------------------------------------------------------------------
-    # handle_key — MUST be called before process_frame each iteration
-    # ------------------------------------------------------------------
     def handle_key(self, key):
         if key == -1:
             return
@@ -204,9 +189,6 @@ class FaceAuth:
                 self._force_relock("Face lost — grace expired")
         return frame
 
-    # ------------------------------------------------------------------
-    # process_frame — full path, no key param (key handled in handle_key)
-    # ------------------------------------------------------------------
     def process_frame(self, frame):
         if self._state == _ST_NAMING:
             return self._draw_naming(frame)
@@ -370,9 +352,7 @@ class FaceAuth:
         self._grace_count=0; self._scan_prog=0.0; self._match_buf.clear()
         self._tracker.reset(); self._track_status="SCANNING"
 
-    # ------------------------------------------------------------------
-    # HUD — drawn on main thread only
-    # ------------------------------------------------------------------
+
     def draw_status_bar(self, frame):
         cv2.rectangle(frame,(0,0),(frame.shape[1],68),
                       (0,100,0) if self._unlocked else (0,0,120),-1)
