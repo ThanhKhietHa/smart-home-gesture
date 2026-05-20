@@ -1,5 +1,3 @@
-
-
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -12,7 +10,8 @@ from collections import deque
 
 import config
 
-GRACE_FRAMES  = 20
+GRACE_FRAMES  = 20       # kept for HUD display only
+GRACE_SECONDS = 2.0      # actual relock timer — time-based, not frame-count-based
 IOU_THRESHOLD = 0.30
 
 _face_options = vision.FaceLandmarkerOptions(
@@ -109,7 +108,7 @@ def _identify(lm_n,db):
 
 class FaceAuth:
     __slots__=('_db','_state','_unlocked','_unlock_name','_unlock_time',
-               '_tracker','_grace_count','_tracked_id','_match_buf',
+               '_tracker','_grace_count','_grace_start','_tracked_id','_match_buf',
                '_last_se','_last_ie','_last_cand','_track_status',
                '_enroll_name','_enroll_col','_enroll_start','_del_names',
                '_typed','_frame_counter','_scan_prog')
@@ -117,7 +116,7 @@ class FaceAuth:
     def __init__(self):
         self._db=_load_db(); self._state=_ST_RECOGNISE
         self._unlocked=False; self._unlock_name=""; self._unlock_time=0.0
-        self._tracker=_CentroidTracker(); self._grace_count=0; self._tracked_id=-1
+        self._tracker=_CentroidTracker(); self._grace_count=0; self._grace_start=0.0; self._tracked_id=-1
         self._match_buf=deque(maxlen=config.FACE_CONFIRM_FRAMES)
         self._last_se=999.0; self._last_ie=999.0; self._last_cand="—"
         self._track_status="SCANNING"; self._enroll_name=""
@@ -176,17 +175,32 @@ class FaceAuth:
 
     def _update_presence(self, frame, box):
         if box is not None:
-            tid,_=self._tracker.update(box); self._grace_count=0
-            self._track_status=f"UNLOCKED id={tid}"
-            x1,y1,x2,y2=box
+            tid,_           = self._tracker.update(box)
+            self._grace_count = 0
+            self._grace_start = 0.0          # reset timer when face reappears
+            self._track_status = f"UNLOCKED id={tid}"
+            x1,y1,x2,y2 = box
             cv2.rectangle(frame,(x1,y1),(x2,y2),(0,220,0),3)
             cv2.putText(frame,self._unlock_name,(x1,max(y1-10,85)),
                         cv2.FONT_HERSHEY_SIMPLEX,0.8,(0,255,0),2)
         else:
-            self._tracker.lost(); self._grace_count+=1
-            self._track_status=f"LOST {self._grace_count}/{GRACE_FRAMES}"
-            if self._unlocked and self._grace_count>=GRACE_FRAMES:
-                self._force_relock("Face lost — grace expired")
+            self._tracker.lost()
+            self._grace_count += 1
+
+            # Start the 2-second wall-clock timer on first missed frame
+            if self._grace_start == 0.0:
+                self._grace_start = time.time()
+
+            elapsed = time.time() - self._grace_start
+            remaining = max(0.0, GRACE_SECONDS - elapsed)
+            self._track_status = f"LOST {elapsed:.1f}/{GRACE_SECONDS}s"
+
+            # Show countdown on screen so user can see relock is coming
+            cv2.putText(frame, f"Relocking in {remaining:.1f}s",
+                        (20, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 100, 255), 2)
+
+            if self._unlocked and elapsed >= GRACE_SECONDS:
+                self._force_relock("Face lost — 2s grace expired")
         return frame
 
     def process_frame(self, frame):
@@ -349,8 +363,8 @@ class FaceAuth:
     def _force_relock(self, reason=""):
         if reason: print(f"[FACE] Relocked: {reason}")
         self._unlocked=False; self._unlock_name=""; self._tracked_id=-1
-        self._grace_count=0; self._scan_prog=0.0; self._match_buf.clear()
-        self._tracker.reset(); self._track_status="SCANNING"
+        self._grace_count=0; self._grace_start=0.0; self._scan_prog=0.0
+        self._match_buf.clear(); self._tracker.reset(); self._track_status="SCANNING"
 
 
     def draw_status_bar(self, frame):
