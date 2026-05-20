@@ -55,9 +55,13 @@ def detect_gesture(lm):
         tp = _dist(thumb_tip, wrist)
         tv = thumb_tip.y - thumb_cmc.y
 
-        # ── Thumb Up (KEPT) ─────────────────────────────────────
+        # ── Thumb Up / Thumb Down ────────────────────────────────
+        # All four fingers folded + thumb extended away from wrist
+        # tv < -0.10 → thumb tip above CMC = Thumb Up
+        # tv >  0.10 → thumb tip below CMC = Thumb Down
         if n == 0 and tp > 0.18:
             if tv < -0.10: return "Thumb Up"
+            if tv >  0.10: return "Thumb Down"
 
         # ── Open Palm (KEPT) ────────────────────────────────────
         if n >= 3:               return "Open Palm"
@@ -183,7 +187,7 @@ class GestureControl:
             (20 + int(bw * min(elapsed/config.GESTURE_HOLD_TIME, 1.0)), 224),
             (0,200,255), -1)
 
-        cv2.putText(frame, f"-> {dev.upper()} {act.upper()}",
+        cv2.putText(frame, f"-> {dev.upper()}",
                     (20, 244), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180,255,180), 2)
 
         if elapsed >= config.GESTURE_HOLD_TIME:
@@ -272,7 +276,8 @@ class GestureControl:
         else:
             self._conf_gesture = None
             self._conf_start   = 0.0
-            cv2.putText(frame, "Show Thumb UP (ON) or DOWN (OFF)",
+            prompt = "Show Thumb UP (ON) or DOWN (OFF)" if has_onoff else "Show Thumb UP to toggle"
+            cv2.putText(frame, prompt,
                         (20,260), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (180,180,180), 1)
 
         return None
