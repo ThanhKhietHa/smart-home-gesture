@@ -8,16 +8,12 @@ import cv2
 import time
 import threading
 import config
-from face_auth       import FaceAuth
+from face_auth       import FaceAuth, _ST_RECOGNISE
 from gesture_control import GestureControl
 from mqtt_handler    import MQTTHandler
 
 PRESENCE_EVERY = 5   # face presence check every N ticks when unlocked
 
-
-# =====================================================================
-# CAMERA — GStreamer with HW decode, fallback to V4L2 MJPG
-# =====================================================================
 def _open_camera(cfg):
     """
     Try 3 methods in order:
@@ -205,7 +201,13 @@ def face_thread(face, buf, state, stop_event):
         buf.write_face(raw)
 
         if unlocked:
-            if tick % 90 == 0:
+            # Always run process_frame when in a menu state (naming/enrolling/delete)
+            # otherwise the overlay never appears because those ticks are skipped
+            in_menu = face._state != _ST_RECOGNISE
+
+            if in_menu:
+                frame = face.process_frame(raw)
+            elif tick % 90 == 0:
                 frame = face.process_frame(raw)
             elif tick % PRESENCE_EVERY == 0:
                 frame = face.process_presence_only(raw)
