@@ -1,9 +1,3 @@
-"""
-main.py — Smart Home Face + Gesture Control
-3 threads: main (display), face, gesture
-GStreamer: nvjpegdec (HW) → jpegdec (CPU) → V4L2+MJPG fallback
-"""
-
 import cv2
 import time
 import threading
@@ -258,6 +252,9 @@ def main():
     gesture = GestureControl()
     buf     = FrameBuffer()
     state   = SharedState()
+
+    # Sync ESP state before anything renders or camera stream starts
+    mqtt.wait_for_sync(timeout=5.0)
 
     cap = _open_camera(config)
     if not cap.isOpened():
