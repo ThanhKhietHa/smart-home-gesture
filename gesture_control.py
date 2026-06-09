@@ -63,14 +63,14 @@ def detect_gesture(lm):
             if tv < -0.10: return "Thumb Up"
             if tv >  0.10: return "Thumb Down"
 
-        # ── Open Palm (KEPT) ────────────────────────────────────
+        # ── Open Palm ───────────────────────────────────────────
         if n >= 3:               return "Open Palm"
 
-        # ── Peace Sign (KEPT) ──────────────────────────────────────────
+        # ── Peace Sign ──────────────────────────────────────────
         if ie and me and not re and not pe:      
             return "Peace Sign"
 
-        # ── Pointing Up (KEPT) ──────────────────────────────────────────
+        # ── Pointing Up ─────────────────────────────────────────
         if ie and not me and not re and not pe:
             il = _dist(index_tip, index_mcp)
             ml = _dist(middle_tip, middle_mcp)
@@ -99,7 +99,6 @@ class GestureControl:
         self._conf_entry    = 0.0
         self._no_hand_start = 0.0
         self._buf           = deque(maxlen=6)
-        self.device_states = dict(config.DEVICE_INITIAL_STATES)
         
         self._valid_gestures = set(config.GESTURE_COMMANDS.keys())
         print(f"[GESTURE] Active gestures: {list(self._valid_gestures)}")
@@ -122,16 +121,13 @@ class GestureControl:
         self._buf.append(detect_gesture(lm))
         detected = self._smooth()
 
-        # OPTIMIZATION: NO landmark drawing (removed for FPS)
-        # Drawing landmarks kills FPS on Jetson — removed completely
-
         # Blocked — face not authenticated
         if not face_unlocked:
             self._reset()
             cv2.putText(frame, "FACE AUTH REQUIRED",
                         (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
                         1.0, (0, 0, 220), 2)
-            self._draw_devices(frame)
+            self._draw_devices(frame, mqtt)
             return frame, None
 
         # Route to state
@@ -146,7 +142,7 @@ class GestureControl:
                             (20, 160), cv2.FONT_HERSHEY_SIMPLEX,
                             0.7, (100, 100, 100), 1)
 
-        self._draw_devices(frame)
+        self._draw_devices(frame, mqtt)
         return frame, feedback
 
     # ── Gesture smoothing — majority vote ─────────────────────────────
@@ -268,7 +264,6 @@ class GestureControl:
             if held >= config.CONFIRM_HOLD_TIME:
                 final_action = ("on" if is_up else "off") if has_onoff else "toggle"
                 mqtt.publish(dev, final_action)
-                self._update_device(dev, final_action)
                 feedback = (f"{dev.upper()} {final_action.upper()} ACTIVATED!",
                             (0, 255, 0) if is_up else (0, 100, 255))
                 self._reset()
@@ -282,18 +277,21 @@ class GestureControl:
 
         return None
 
-    def _update_device(self, device, action):
-        if action == "toggle":
-            cur = self.device_states.get(device, 0)
-            self.device_states[device] = 0 if cur else 1
-        elif isinstance(self.device_states.get(device), str):
-            self.device_states[device] = action
-        else:
-            self.device_states[device] = 1 if action == "on" else 0
-
-    def _draw_devices(self, frame):
+    def _draw_devices(self, frame, mqtt=None):
         H, W = frame.shape[:2]
-        n    = len(self.device_states)
+        
+        # Read real state from MQTT if available, else fall back to clean empty states
+        if mqtt is not None:
+            states = {
+                "lights": mqtt.get_state("lights") or "OFF",
+                "ac":     mqtt.get_state("ac")     or "OFF",
+                "door":   mqtt.get_state("door")   or "READY",
+                "window": mqtt.get_state("window") or "STOPPED",
+            }
+        else:
+            states = {"lights": "OFF", "ac": "OFF", "door": "READY", "window": "STOPPED"}
+
+        n    = len(states)
         lh   = 20
         pw   = 160
         ph   = n * lh + 8
@@ -305,14 +303,20 @@ class GestureControl:
         cv2.addWeighted(overlay, 0.50, frame, 0.50, 0, frame)
 
         y = y0 + lh
-        for dev, state in self.device_states.items():
-            if isinstance(state, str):
-                label = state.upper()
-                color = (0, 200, 0) if state not in ("stopped", "off", "close") \
-                        else (80, 80, 80)
+        for dev, state in states.items():
+            # Door special case: PULSING -> show TRIGGERED in yellow
+            if dev == "door":
+                if state == "PULSING":
+                    label = "TRIGGERED"
+                    color = (0, 200, 255)  # yellow/amber
+                else:
+                    label = state  # READY
+                    color = (0, 210, 0)   # green
             else:
-                label = "ON" if state else "OFF"
-                color = (0, 210, 0) if state else (80, 80, 80)
+                label = state
+                color = (0, 210, 0) if state in ("ON", "GOING_UP", "GOING_DOWN") \
+                        else (80, 80, 80)
+
             cv2.putText(frame, f"{dev.capitalize()}: {label}",
                         (x0 + 5, y),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.48, color, 1)
