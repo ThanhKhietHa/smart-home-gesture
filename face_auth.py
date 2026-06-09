@@ -380,9 +380,9 @@ class FaceAuth:
                 cv2.putText(frame,f"GRACE {self._grace_count}/{GRACE_FRAMES}",(12,62),
                             cv2.FONT_HERSHEY_SIMPLEX,0.45,(0,200,255),1)
         else:
-            lbl={_ST_NAMING:"NAMING — type name then Enter",
-                 _ST_ENROLLING:f"ENROLLING: {self._enroll_name}",
-                 _ST_DELETE:"DELETE MODE — press number"}
+            lbl={_ST_NAMING:    "ENROLLING — type name then Enter  |  ESC=cancel",
+                 _ST_ENROLLING: f"ENROLLING: {self._enroll_name}  |  ESC=cancel",
+                 _ST_DELETE:    "DELETE MODE — press number  |  ESC=cancel"}
             if self._state in lbl:
                 msg=lbl[self._state]
             elif not self._db:
