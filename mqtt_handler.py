@@ -87,6 +87,7 @@ class MQTTHandler:
             print(f"[STATUS] {key}: {old} → {payload}")
             if callable(self.on_state_change):
                 self.on_state_change(key, payload)
+
     def _connect_loop(self):
         """
         Tries to connect once; paho's loop_start() handles reconnection.
@@ -101,6 +102,30 @@ class MQTTHandler:
                 print(f"[MQTT] Cannot reach broker: {e} "
                       f"— retry in {config.MQTT_RECONNECT_DELAY}s")
                 time.sleep(config.MQTT_RECONNECT_DELAY)
+
+    def wait_for_sync(self, timeout=5.0):
+        """
+        On app restart, ESP is already running and publishing status every 15s.
+        Wait up to `timeout` seconds for all states to arrive.
+        If timeout — default everything to OFF/READY (safe state).
+        """
+        print("[MQTT] Syncing with ESP state...")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if all(self.state[k] is not None
+                   for k in ("lights", "ac", "door", "window")):
+                print(f"[MQTT] Sync OK → {self.state}")
+                return True
+            time.sleep(0.1)
+
+        # Timeout — fill missing with safe defaults
+        defaults = {"lights": "OFF", "ac": "OFF", "door": "READY", "window": "STOPPED"}
+        for k, v in defaults.items():
+            if self.state[k] is None:
+                self.state[k] = v
+        print(f"[MQTT] Sync timeout — using defaults: {self.state}")
+        return False
+
     def publish(self, device: str, action: str):
         """
         Sends a command topic to the ESP, e.g. publish("lights", "on").
