@@ -95,9 +95,10 @@ class MQTTHandler:
         self._client.loop_start()
         while not self._connected:
             try:
-                self._client.connect(config.MQTT_BROKER,
-                                     config.MQTT_PORT, 60)
+                self._client.connect(config.MQTT_BROKER, config.MQTT_PORT, 60)
                 time.sleep(1.5)
+                if self._connected:
+                    break
             except Exception as e:
                 print(f"[MQTT] Cannot reach broker: {e} "
                       f"— retry in {config.MQTT_RECONNECT_DELAY}s")
@@ -111,6 +112,18 @@ class MQTTHandler:
         """
         print("[MQTT] Syncing with ESP state...")
         deadline = time.time() + timeout
+
+        # Wait for connection first before expecting status messages
+        while time.time() < deadline:
+            if self._connected:
+                break
+            time.sleep(0.1)
+        else:
+            print("[MQTT] Sync failed — broker not reachable")
+            self._apply_defaults()
+            return False
+
+        # Now wait for ESP status topics
         while time.time() < deadline:
             if all(self.state[k] is not None
                    for k in ("lights", "ac", "door", "window")):
@@ -118,13 +131,15 @@ class MQTTHandler:
                 return True
             time.sleep(0.1)
 
-        # Timeout — fill missing with safe defaults
+        self._apply_defaults()
+        return False
+
+    def _apply_defaults(self):
         defaults = {"lights": "OFF", "ac": "OFF", "door": "READY", "window": "STOPPED"}
         for k, v in defaults.items():
             if self.state[k] is None:
                 self.state[k] = v
         print(f"[MQTT] Sync timeout — using defaults: {self.state}")
-        return False
 
     def publish(self, device: str, action: str):
         """
