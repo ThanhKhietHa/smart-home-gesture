@@ -84,9 +84,6 @@ def detect_gesture(lm):
     except Exception:
         return "No hand"
 
-# =====================================================================
-# GESTURE CONTROLLER — NO landmark drawing
-# =====================================================================
 class GestureControl:
 
     def __init__(self):
