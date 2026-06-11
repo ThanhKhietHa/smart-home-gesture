@@ -10,7 +10,6 @@ class MQTTHandler:
         self._connected = False
         self._lock      = threading.Lock()
 
-        # Device states — always driven by ESP status topics, never assumed
         self.state = {
             "lights": None,   # "ON" | "OFF"
             "ac":     None,   # "ON" | "OFF"
