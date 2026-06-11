@@ -66,10 +66,6 @@ def _open_camera(cfg):
         print("[CAM] WARN: MJPG not applied — may be bandwidth-limited")
     return cap
 
-
-# =====================================================================
-# FRAME BUFFER — frame_id counter for deduplication
-# =====================================================================
 class FrameBuffer:
     """
     frame_id increments every write_raw so threads can detect new frames
@@ -114,10 +110,6 @@ class FrameBuffer:
         with self._lock:
             self._gesture_out = None
 
-
-# =====================================================================
-# SHARED STATE
-# =====================================================================
 class SharedState:
     def __init__(self):
         self._lock           = threading.Lock()
@@ -157,10 +149,6 @@ class SharedState:
                 return self._feedback_msg, self._feedback_col
             return None, None
 
-
-# =====================================================================
-# FACE THREAD
-# =====================================================================
 def face_thread(face, buf, state, stop_event):
     """
     Deduplicates by frame_id — MediaPipe never runs twice on same frame.
@@ -183,20 +171,13 @@ def face_thread(face, buf, state, stop_event):
         key      = state.get_key()
         unlocked = state.is_unlocked()
 
-        # Relock transition — clear stale gesture overlay
         if was_unlocked and not unlocked:
             buf.clear_gesture()
         was_unlocked = unlocked
-
-        # Key handling before inference
         face.handle_key(key)
-
-        # Write raw immediately so display never stalls
         buf.write_face(raw)
 
         if unlocked:
-            # Always run process_frame when in a menu state (naming/enrolling/delete)
-            # otherwise the overlay never appears because those ticks are skipped
             in_menu = face._state != _ST_RECOGNISE
 
             if in_menu:
@@ -215,10 +196,6 @@ def face_thread(face, buf, state, stop_event):
         buf.write_face(frame)
         time.sleep(0.002)  # yield CPU to gesture thread
 
-
-# =====================================================================
-# GESTURE THREAD
-# =====================================================================
 def gesture_thread(gesture, buf, state, mqtt, stop_event):
     """
     Only runs when unlocked. No mutex needed.
@@ -242,10 +219,6 @@ def gesture_thread(gesture, buf, state, mqtt, stop_event):
             state.set_feedback(feedback[0], feedback[1])
         buf.write_gesture(frame)
 
-
-# =====================================================================
-# MAIN
-# =====================================================================
 def main():
     mqtt    = MQTTHandler()
     face    = FaceAuth()
@@ -261,7 +234,6 @@ def main():
         print("[ERROR] Cannot open camera.")
         return
 
-    # Warmup — discard first 15 frames (exposure stabilisation)
     print("[MAIN] Camera warming up...")
     for _ in range(15):
         cap.read()
